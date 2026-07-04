@@ -64,9 +64,9 @@ const TIPOS_ACTIVO = {
   bono:   { label: "Bono",   color: "#6A4C93", icono: "📜" },
 };
 const TIPOS_UNIDADES = ["etf", "accion", "cripto"]; // se introducen por cantidad × precio; fondo/bono por importe directo
-const APP_VERSION = "v48-econ6";
+const APP_VERSION = "v49-econ7";
 const nuevoMes = () => new Date().getMonth();
-const VACIO = { mes: nuevoMes(), bancos: [], inversiones: [], ingresos: [], objetivos: [], fijos: [], variables: [], anuales: [], inmuebles: [], deudas: [], presupuestos: [], puntuales: {}, ingresosMes: {}, cerrados: [],
+const VACIO = { mes: nuevoMes(), bancos: [], inversiones: [], ingresos: [], objetivos: [], fijos: [], variables: [], anuales: [], inmuebles: [], deudas: [], presupuestos: [], puntuales: {}, ingresosMes: {}, provisionPagos: {}, cerrados: [],
   criterios: { mesesEmergencia: 6, proMesLimite: 10, proRedondeo: 50, proBolsa: null, proExtraPct: 42.86, bancoNomina: null, autoAnual: false, autoAnualBanco: null, presImprevistos: 10, presRedondeo: 50 } };
 
 const EJEMPLO = { mes: nuevoMes(), cerrados: [],
@@ -161,7 +161,24 @@ function normalizarIds(dd) {
   Object.values(dd.ingresosMes || {}).forEach(arreglaLista);
   return dd;
 }
-function cargarDatos() { try { const s = localStorage.getItem(STORAGE_KEY); return s ? normalizarIds({ ...VACIO, ...JSON.parse(s) }) : VACIO; } catch (e) { return VACIO; } }
+// Repara referencias a bancos/bolsas que ya no existen (p. ej. tras la reparación de ids duplicados de versiones antiguas)
+function sanearRefs(dd) {
+  const bancos = dd.bancos || [];
+  const hay = (id) => bancos.some((b) => b.id === id);
+  const unico = bancos.length === 1 ? bancos[0].id : null;
+  const arregla = (v) => (v && !hay(v) ? unico : v);
+  (dd.objetivos || []).forEach((o) => { o.banco = arregla(o.banco); });
+  (dd.fijos || []).forEach((g) => { g.banco = arregla(g.banco); });
+  (dd.variables || []).forEach((g) => { g.banco = arregla(g.banco); });
+  if (dd.criterios) {
+    dd.criterios.bancoNomina = arregla(dd.criterios.bancoNomina);
+    dd.criterios.autoAnualBanco = arregla(dd.criterios.autoAnualBanco);
+    const bolsas = bancos.flatMap((b) => (b.reservas || []).map((r) => r.id));
+    if (dd.criterios.proBolsa && !bolsas.includes(dd.criterios.proBolsa)) dd.criterios.proBolsa = null;
+  }
+  return dd;
+}
+function cargarDatos() { try { const s = localStorage.getItem(STORAGE_KEY); return s ? sanearRefs(normalizarIds({ ...VACIO, ...JSON.parse(s) })) : VACIO; } catch (e) { return VACIO; } }
 function guardarDatos(dd) { try { localStorage.setItem(STORAGE_KEY, JSON.stringify(dd)); } catch (e) {} }
 
 function App() {
@@ -178,12 +195,31 @@ function App() {
   const vacio = d.bancos.length === 0 && d.ingresos.length === 0;
 
   const saldoTotal = d.bancos.reduce((a, b) => a + n(b.saldo) * factor(b), 0);
+  const nominaRef = d.ingresos.find((g) => g.nomina)?.importe || d.ingresos[0]?.importe || 0;
+  const ingresoMes = d.ingresos.reduce((a, g) => a + n(g.importe), 0);
+  // Prorrateo de anuales (se calcula antes porque puede generar un gasto fijo automático)
+  const pagadoConcepto = (x) => x.pagos.reduce((a, p) => a + n(p.importe), 0);
+  const anualTotal = d.anuales.reduce((a, c) => a + c.conceptos.reduce((s, x) => s + n(x.importe), 0), 0);
+  const anualPagado = d.anuales.reduce((a, c) => a + c.conceptos.reduce((s, x) => s + pagadoConcepto(x), 0), 0);
+  const anualPendiente = anualTotal - anualPagado;
+  const mesesRest = Math.max(1, d.criterios.proMesLimite - d.mes + 1);
+  const todasBolsas = d.bancos.flatMap((b) => b.reservas.map((r) => ({ id: r.id, importe: n(r.importe), label: `${b.nombre} · ${r.nombre || "bolsa"}` })));
+  const bolsaSel = todasBolsas.find((x) => x.id === d.criterios.proBolsa);
+  const reservaBolsa = bolsaSel ? bolsaSel.importe : 0;
+  const extraFactor = n(nominaRef) * (n(d.criterios.proExtraPct) / 100);
+  const apartarAnual = red(Math.max(0, anualPendiente - reservaBolsa - extraFactor) / mesesRest, n(d.criterios.proRedondeo));
+
   const cuotaObj = (o) => Math.max(0, (n(o.meta) - n(o.ahorrado))) / Math.max(1, n(o.meses));
   const cuotaObjRed = (o) => red(cuotaObj(o), 50);
+  const bancoExiste = (id) => !!id && d.bancos.some((b) => b.id === id);
   // Un objetivo automatizado genera un gasto fijo (la cuota) y una bolsa de reserva (lo ahorrado) en su banco
-  const objsAuto = d.objetivos.filter((o) => o.auto && o.banco && d.bancos.some((b) => b.id === o.banco));
+  const objsAuto = d.objetivos.filter((o) => o.auto && bancoExiste(o.banco));
   const fijosObjetivo = objsAuto.map((o) => ({ id: "obj-" + o.id, objetivoId: o.id, nombre: "Ahorro: " + (o.nombre || "objetivo"), importe: cuotaObjRed(o), banco: o.banco, esObjetivo: true, pagados: Object.keys(o.aportaciones || {}).map(Number) }));
-  const fijosEfectivos = [...d.fijos, ...fijosObjetivo];
+  // La provisión de anuales automatizada también es un gasto fijo
+  const bancoAnualOk = bancoExiste(d.criterios.autoAnualBanco);
+  const provisionAnual = d.criterios.autoAnual && bancoAnualOk ? [{ id: "anual-auto", nombre: "Provisión gastos anuales", importe: apartarAnual, banco: d.criterios.autoAnualBanco, esAnual: true, pagados: Object.keys(d.provisionPagos || {}).map(Number) }] : [];
+  const fijosAuto = [...fijosObjetivo, ...provisionAnual];
+  const fijosEfectivos = [...d.fijos, ...fijosAuto];
   const totFijos = fijosEfectivos.reduce((a, g) => a + n(g.importe), 0);
   const totVar = d.variables.reduce((a, g) => a + n(g.importe), 0);
   // Bolsas de reserva: las manuales + una bolsa por cada objetivo automatizado (su ahorrado)
@@ -195,30 +231,16 @@ function App() {
   const calcInv = (i) => i.soloPos ? { invertido: n(i.valor), valor: n(i.valor) } : TIPOS_UNIDADES.includes(i.tipo) ? { invertido: n(i.cantidad) * n(i.precioMedio), valor: n(i.cantidad) * n(i.precioActual) } : { invertido: n(i.invertido), valor: n(i.valor) };
   const invInvertido = d.inversiones.reduce((a, i) => a + calcInv(i).invertido, 0);
   const invValor = d.inversiones.reduce((a, i) => a + calcInv(i).valor, 0);
-  const nominaRef = d.ingresos.find((g) => g.nomina)?.importe || d.ingresos[0]?.importe || 0;
-  // El fondo de emergencia se calcula a partir de los gastos fijos (que incluyen los objetivos de ahorro automatizados)
+  // El fondo de emergencia se calcula a partir de los gastos fijos (que incluyen el ahorro automatizado)
   const fondoEmergencia = n(d.criterios.mesesEmergencia) * totFijos;
   const disponible = saldoTotal - reservasTotal - fondoEmergencia;
-  const ingresoMes = d.ingresos.reduce((a, g) => a + n(g.importe), 0);
-  const pagadoConcepto = (x) => x.pagos.reduce((a, p) => a + n(p.importe), 0);
-  const anualTotal = d.anuales.reduce((a, c) => a + c.conceptos.reduce((s, x) => s + n(x.importe), 0), 0);
-  const anualPagado = d.anuales.reduce((a, c) => a + c.conceptos.reduce((s, x) => s + pagadoConcepto(x), 0), 0);
-  const anualPendiente = anualTotal - anualPagado;
-
-  const mesesRest = Math.max(1, d.criterios.proMesLimite - d.mes + 1);
-  const todasBolsas = d.bancos.flatMap((b) => b.reservas.map((r) => ({ id: r.id, importe: n(r.importe), label: `${b.nombre} · ${r.nombre || "bolsa"}` })));
-  const bolsaSel = todasBolsas.find((x) => x.id === d.criterios.proBolsa);
-  const reservaBolsa = bolsaSel ? bolsaSel.importe : 0;
-  const extraFactor = n(nominaRef) * (n(d.criterios.proExtraPct) / 100);
-  const apartarAnual = red(Math.max(0, anualPendiente - reservaBolsa - extraFactor) / mesesRest, n(d.criterios.proRedondeo));
 
   const cuotaObjTotal = red(d.objetivos.reduce((a, o) => a + cuotaObj(o), 0), 50);
   const cuotaObjAutoTotal = objsAuto.reduce((a, o) => a + cuotaObjRed(o), 0);
   const totalPresup = (p) => { const base = (p.articulos || []).reduce((a, ar) => a + n(ar.uds) * n(ar.precio), 0); return base * (1 + n(p.imprevistos) / 100); };
 
-  const compAnual = d.criterios.autoAnual ? apartarAnual : 0;
-  const gastoCorriente = totFijos + totVar; // totFijos ya incluye las cuotas de objetivos automatizados
-  const ahorroLibre = ingresoMes - gastoCorriente - compAnual;
+  const gastoCorriente = totFijos + totVar; // totFijos ya incluye el ahorro automatizado (objetivos + provisión anuales)
+  const ahorroLibre = ingresoMes - gastoCorriente;
   const inmueblesTotal = (d.inmuebles || []).reduce((a, i) => a + n(i.valor), 0);
   const deudasTotal = (d.deudas || []).reduce((a, x) => a + n(x.importe), 0);
   const patrimonio = saldoTotal + invValor + inmueblesTotal - deudasTotal;
@@ -456,15 +478,21 @@ function App() {
                     </div>
                     <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
                       <span style={{ fontFamily: T.ui, fontSize: 10, color: T.dim }}>Ahorra en</span>
-                      <Sel value={o.banco} onChange={(v) => upd((c) => { c.objetivos.find((x) => x.id === o.id).banco = v; })} opciones={bancoOptsN} ancho={150} />
+                      <Sel value={bancoExiste(o.banco) ? o.banco : ""} onChange={(v) => upd((c) => { c.objetivos.find((x) => x.id === o.id).banco = v || null; })} opciones={bancoOptsN} ancho={150} />
                     </div>
                     <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, padding: "8px 10px", background: o.auto ? `${T.accent}0d` : T.surface2, borderRadius: 9, border: `1px solid ${o.auto ? T.accent + "33" : T.line}` }}>
                       <div style={{ flex: 1 }}>
                         <div style={{ fontFamily: T.ui, fontSize: 12, color: T.text, fontWeight: 600 }}>Automatizar</div>
                         <div style={{ fontFamily: T.ui, fontSize: 10, color: T.dim, lineHeight: 1.4 }}>{o.auto && o.banco ? `Crea una bolsa en ${nombreBanco(o.banco)} y un gasto fijo de ${eur(cuotaObjRed(o))}/mes` : "Genera bolsa de reserva + gasto fijo mensual"}</div>
                       </div>
-                      <Toggle on={!!o.auto} onClick={() => upd((c) => { const x = c.objetivos.find((y) => y.id === o.id); x.auto = !x.auto; if (x.auto && !x.banco) x.banco = c.bancos[0]?.id || null; })} />
+                      <Toggle on={!!o.auto} onClick={() => upd((c) => { const x = c.objetivos.find((y) => y.id === o.id); x.auto = !x.auto; if (x.auto && !c.bancos.some((b) => b.id === x.banco)) x.banco = c.bancos[0]?.id || null; })} />
                     </div>
+                    {o.auto && !bancoExiste(o.banco) && (
+                      <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 8, padding: "7px 10px", background: `${T.warn}10`, borderRadius: 8, border: `1px solid ${T.warn}44` }}>
+                        <Icon n="info" s={14} c={T.warn} />
+                        <span style={{ fontFamily: T.ui, fontSize: 10.5, color: T.warn, lineHeight: 1.4 }}>Este objetivo no tiene un banco válido. Elige uno en "Ahorra en" para que se creen la bolsa y el gasto fijo.</span>
+                      </div>
+                    )}
                     <div style={{ height: 5, background: T.surface2, borderRadius: 3, overflow: "hidden", marginBottom: 6 }}><div style={{ width: pct + "%", height: "100%", background: T.accent, borderRadius: 3 }} /></div>
                     <div style={{ display: "flex", justifyContent: "space-between" }}><span style={{ fontFamily: T.mono, fontSize: 10.5, color: T.dim }}>faltan {eur(rest)}</span><span style={{ fontFamily: T.mono, fontSize: 11, color: T.accent, fontWeight: 600 }}>cuota {eur(cuotaObj(o))}/mes</span></div>
                   </div>
@@ -473,25 +501,25 @@ function App() {
               <AddBtn label="Añadir objetivo" onClick={() => upd((c) => c.objetivos.push({ id: uid(), nombre: "", meta: 0, ahorrado: 0, meses: 12, banco: d.bancos[0]?.id || null, auto: false }))} />
             </Bloque>
 
-            <Bloque icon="gasto" titulo="Gastos mensuales" sub="Fijos y prescindibles · con banco de pago" total={totFijos + totVar} abierto={!!abiertos.gm} onTog={() => tog("gm")} vacio={d.fijos.length === 0 && d.variables.length === 0}>
+            <Bloque icon="gasto" titulo="Gastos mensuales" sub="Fijos y prescindibles · con banco de pago" total={totFijos + totVar} abierto={!!abiertos.gm} onTog={() => tog("gm")} vacio={d.fijos.length === 0 && d.variables.length === 0 && fijosAuto.length === 0}>
               {d.fijos.length === 0 && d.variables.length === 0 && <Vacio txt="Añade tus gastos recurrentes e indica de qué banco sale cada uno (para el reparto del mes)." />}
               <SubLista d={d} upd={upd} campo="fijos" label="Fijos mensuales" total={d.fijos.reduce((a, g) => a + n(g.importe), 0)} bancoOpts={bancoOptsN} />
-              {fijosObjetivo.length > 0 && (
+              {fijosAuto.length > 0 && (
                 <div style={{ marginBottom: 14 }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 8 }}>
-                    <span style={{ fontFamily: T.ui, fontSize: 11, fontWeight: 700, color: T.mid, textTransform: "uppercase", letterSpacing: "0.05em" }}>Ahorro de objetivos</span>
-                    <span style={{ fontFamily: T.mono, fontSize: 12, color: T.dim }}>{eur(cuotaObjAutoTotal)}</span>
+                    <span style={{ fontFamily: T.ui, fontSize: 11, fontWeight: 700, color: T.mid, textTransform: "uppercase", letterSpacing: "0.05em" }}>Ahorro automático</span>
+                    <span style={{ fontFamily: T.mono, fontSize: 12, color: T.dim }}>{eur(fijosAuto.reduce((a, g) => a + n(g.importe), 0))}</span>
                   </div>
-                  {fijosObjetivo.map((g) => (
+                  {fijosAuto.map((g) => (
                     <div key={g.id} style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 6, padding: "8px 10px", background: `${T.accentSoft}0f`, borderRadius: 9, border: `1px dashed ${T.accentSoft}55` }}>
-                      <Icon n="objetivo" s={14} c={T.accentSoft} />
+                      <Icon n={g.esAnual ? "anual" : "objetivo"} s={14} c={T.accentSoft} />
                       <span style={{ flex: 1, fontFamily: T.ui, fontSize: 12.5, color: T.mid }}>{g.nombre}</span>
                       <span style={{ fontFamily: T.ui, fontSize: 8.5, fontWeight: 700, color: T.accentSoft, background: `${T.accentSoft}1e`, borderRadius: 4, padding: "2px 5px", textTransform: "uppercase" }}>auto</span>
                       <span style={{ fontFamily: T.mono, fontSize: 9.5, color: T.dim, background: T.surface2, borderRadius: 5, padding: "2px 6px" }}>{nombreBanco(g.banco)}</span>
                       <span style={{ fontFamily: T.mono, fontSize: 12.5, fontWeight: 600, color: T.mid }}>{eur(g.importe)}</span>
                     </div>
                   ))}
-                  <div style={{ fontFamily: T.ui, fontSize: 10, color: T.dim, marginTop: 2 }}>Generados por objetivos automatizados. Se editan desde su objetivo.</div>
+                  <div style={{ fontFamily: T.ui, fontSize: 10, color: T.dim, marginTop: 2 }}>Generados por los objetivos automatizados y la provisión de anuales. Se controlan desde su origen.</div>
                 </div>
               )}
               <SubLista d={d} upd={upd} campo="variables" label="Prescindibles" total={totVar} bancoOpts={bancoOptsN} />
@@ -613,8 +641,9 @@ function App() {
               <div style={{ fontFamily: T.mono, fontSize: 10, color: T.dim, margin: "2px 0 16px", lineHeight: 1.5 }}>({eur(anualPendiente)} − {eur(reservaBolsa)} bolsa{n(d.criterios.proExtraPct) > 0 ? ` − ${eur(extraFactor)} extra` : ""}) ÷ {mesesRest} → <span style={{ color: T.accent }}>{eur(apartarAnual)}/mes</span></div>
 
               <Titulo icon="auto" t="Ahorro automático" />
-              <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "7px 0" }}><div style={{ flex: 1 }}><div style={{ fontFamily: T.ui, fontSize: 13, color: T.text, fontWeight: 600 }}>Apartar anuales solo</div><div style={{ fontFamily: T.ui, fontSize: 10.5, color: T.dim }}>Crea el ahorro del prorrateo cada mes</div></div><Toggle on={d.criterios.autoAnual} onClick={() => upd((c) => { c.criterios.autoAnual = !c.criterios.autoAnual; })} /></div>
-              {d.criterios.autoAnual && <CritFila titulo="→ a qué banco" desc={`${eur(apartarAnual)}/mes`}><Sel value={d.criterios.autoAnualBanco} onChange={(v) => upd((c) => { c.criterios.autoAnualBanco = v; })} opciones={bancoOptsN} /></CritFila>}
+              <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "7px 0" }}><div style={{ flex: 1 }}><div style={{ fontFamily: T.ui, fontSize: 13, color: T.text, fontWeight: 600 }}>Apartar anuales solo</div><div style={{ fontFamily: T.ui, fontSize: 10.5, color: T.dim }}>Crea un gasto fijo mensual con la provisión</div></div><Toggle on={d.criterios.autoAnual} onClick={() => upd((c) => { c.criterios.autoAnual = !c.criterios.autoAnual; })} /></div>
+              {d.criterios.autoAnual && <CritFila titulo="→ a qué banco" desc={`${eur(apartarAnual)}/mes`}><Sel value={bancoAnualOk ? d.criterios.autoAnualBanco : ""} onChange={(v) => upd((c) => { c.criterios.autoAnualBanco = v || null; })} opciones={bancoOptsN} /></CritFila>}
+              {d.criterios.autoAnual && !bancoAnualOk && <div style={{ fontFamily: T.ui, fontSize: 10.5, color: T.warn, padding: "2px 0 6px" }}>Elige a qué banco va la provisión para que se cree el gasto fijo.</div>}
               <div style={{ fontFamily: T.ui, fontSize: 10.5, color: T.dim, padding: "4px 0 2px", lineHeight: 1.5 }}>Los objetivos se automatizan uno a uno desde su ficha (crean su bolsa y su gasto fijo).</div>
               <div style={{ height: 10 }} />
               <Titulo icon="carro" t="Presupuestos" />
@@ -624,15 +653,15 @@ function App() {
           </>
         )}
 
-        {tab === "mes" && <VistaMes {...{ d, upd, n, ingresoMes, totFijos, totVar, apartarAnual, compAnual, ahorroLibre, fijosEfectivos, cuotaObjAutoTotal, nombreBanco, MESES }} />}
+        {tab === "mes" && <VistaMes {...{ d, upd, n, ingresoMes, totFijos, totVar, apartarAnual, ahorroLibre, fijosEfectivos, cuotaObjAutoTotal, nombreBanco, MESES }} />}
 
-        {tab === "resumen" && <Resumen {...{ patrimonio, saldoTotal, reservasTotal, disponible, fondoEmergencia, mesesEmergencia: d.criterios.mesesEmergencia, totFijos, invValor, invInvertido, inmueblesTotal, deudasTotal, ingresoMes, gastoCorriente, apartarAnual, cuotaObjTotal, cuotaObjAutoTotal, compAnual, ahorroLibre, anualPendiente, mesesRest, mesLabel: MESES[d.mes], reservaBolsa, extraFactor, bolsaLabel: bolsaSel ? bolsaSel.label : null, hayCompartidas, autoAnual: d.criterios.autoAnual, bancoAnual: nombreBanco(d.criterios.autoAnualBanco), vacio }} />}
+        {tab === "resumen" && <Resumen {...{ patrimonio, saldoTotal, reservasTotal, disponible, fondoEmergencia, mesesEmergencia: d.criterios.mesesEmergencia, totFijos, invValor, invInvertido, inmueblesTotal, deudasTotal, ingresoMes, gastoCorriente, apartarAnual, cuotaObjTotal, cuotaObjAutoTotal, ahorroLibre, anualPendiente, mesesRest, mesLabel: MESES[d.mes], reservaBolsa, extraFactor, bolsaLabel: bolsaSel ? bolsaSel.label : null, hayCompartidas, vacio }} />}
       </div>
     </div>
   );
 }
 
-function VistaMes({ d, upd, n, ingresoMes, totFijos, totVar, apartarAnual, compAnual, fijosEfectivos, cuotaObjAutoTotal, nombreBanco }) {
+function VistaMes({ d, upd, n, ingresoMes, totFijos, totVar, apartarAnual, fijosEfectivos, cuotaObjAutoTotal, nombreBanco }) {
   if (d.bancos.length === 0) return <div style={{ fontFamily: T.ui, fontSize: 12.5, color: T.dim, textAlign: "center", padding: "40px 20px", lineHeight: 1.6 }}>Primero añade tus bancos, ingresos y gastos en <b style={{ color: T.accent }}>Datos</b>.<br />Aquí harás el seguimiento de cada mes.</div>;
   const cerrado = d.cerrados.includes(d.mes);
   const mesKey = String(d.mes);
@@ -645,8 +674,7 @@ function VistaMes({ d, upd, n, ingresoMes, totFijos, totVar, apartarAnual, compA
   const necesita = (bid) => {
     const gf = fijosEfectivos.filter((f) => f.banco === bid).reduce((a, f) => a + n(f.importe), 0);
     const gv = d.variables.filter((v) => v.banco === bid).reduce((a, v) => a + n(v.importe), 0);
-    const an = d.criterios.autoAnual && d.criterios.autoAnualBanco === bid ? apartarAnual : 0;
-    return { gf, gv, an, total: gf + gv + an };
+    return { gf, gv, total: gf + gv };
   };
   const bancoNom = d.criterios.bancoNomina;
   const totalReparto = d.bancos.reduce((a, b) => a + necesita(b.id).total, 0);
@@ -655,9 +683,13 @@ function VistaMes({ d, upd, n, ingresoMes, totFijos, totVar, apartarAnual, compA
   const pagados = gastosMes.filter((g) => (g.pagados || []).includes(d.mes));
   const totalGastosMes = gastosMes.reduce((a, g) => a + n(g.importe), 0);
   const pagadoMes = pagados.reduce((a, g) => a + n(g.importe), 0);
-  const apartados = compAnual;
-  const margen = ingresoTotalMes - totalGastosMes - totalPuntuales - apartados;
+  const margen = ingresoTotalMes - totalGastosMes - totalPuntuales;
   const togglePago = (id, tipo) => upd((c) => {
+    if (id === "anual-auto") {
+      c.provisionPagos = c.provisionPagos || {};
+      if (c.provisionPagos[c.mes] != null) { delete c.provisionPagos[c.mes]; } else { c.provisionPagos[c.mes] = apartarAnual; }
+      return;
+    }
     if (String(id).startsWith("obj-")) {
       const oid = String(id).slice(4);
       const o = c.objetivos.find((y) => y.id === oid);
@@ -693,7 +725,7 @@ function VistaMes({ d, upd, n, ingresoMes, totFijos, totVar, apartarAnual, compA
               <Icon n="banco" s={16} c={esNom ? T.accent : T.dim} />
               <div style={{ flex: 1 }}>
                 <div style={{ fontFamily: T.ui, fontSize: 12.5, fontWeight: 600, color: T.text }}>{b.nombre || "banco"} {esNom && <span style={{ fontFamily: T.mono, fontSize: 9, color: T.accent }}>· entra la nómina</span>}</div>
-                <div style={{ fontFamily: T.mono, fontSize: 9.5, color: T.dim }}>{[ne.gf > 0 && `fijos ${eur(ne.gf)}`, ne.gv > 0 && `prescind ${eur(ne.gv)}`, ne.an > 0 && `anual ${eur(ne.an)}`].filter(Boolean).join(" · ") || "sin gastos asignados"}</div>
+                <div style={{ fontFamily: T.mono, fontSize: 9.5, color: T.dim }}>{[ne.gf > 0 && `fijos ${eur(ne.gf)}`, ne.gv > 0 && `prescind ${eur(ne.gv)}`].filter(Boolean).join(" · ") || "sin gastos asignados"}</div>
               </div>
               <div style={{ textAlign: "right" }}>
                 {esNom
@@ -719,7 +751,7 @@ function VistaMes({ d, upd, n, ingresoMes, totFijos, totVar, apartarAnual, compA
             <div key={g.id + g.tipo} onClick={() => togglePago(g.id, g.tipo)} style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 0", borderBottom: `1px solid ${T.line}`, cursor: "pointer" }}>
               <div style={{ width: 22, height: 22, borderRadius: 7, border: `1.5px solid ${ok ? (g.esObjetivo ? T.accentSoft : T.accent) : T.border}`, background: ok ? (g.esObjetivo ? T.accentSoft : T.accent) : "transparent", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{ok && <Icon n="check" s={13} c="#fff" sw={2.5} />}</div>
               <span style={{ flex: 1, fontFamily: T.ui, fontSize: 13, color: ok ? T.dim : T.text, textDecoration: ok ? "line-through" : "none" }}>{g.nombre || "(sin nombre)"}</span>
-              {g.esObjetivo && <span style={{ fontFamily: T.ui, fontSize: 8.5, fontWeight: 700, color: T.accentSoft, background: `${T.accentSoft}1e`, borderRadius: 4, padding: "2px 5px", textTransform: "uppercase", letterSpacing: "0.04em" }}>auto</span>}
+              {(g.esObjetivo || g.esAnual) && <span style={{ fontFamily: T.ui, fontSize: 8.5, fontWeight: 700, color: T.accentSoft, background: `${T.accentSoft}1e`, borderRadius: 4, padding: "2px 5px", textTransform: "uppercase", letterSpacing: "0.04em" }}>auto</span>}
               <span style={{ fontFamily: T.mono, fontSize: 9.5, color: T.dim, background: T.surface2, borderRadius: 5, padding: "2px 6px" }}>{nombreBanco(g.banco)}</span>
               <span style={{ fontFamily: T.mono, fontSize: 12.5, fontWeight: 600, color: ok ? T.dim : T.mid, width: 62, textAlign: "right" }}>{eur(g.importe)}</span>
             </div>
@@ -770,7 +802,6 @@ function VistaMes({ d, upd, n, ingresoMes, totFijos, totVar, apartarAnual, compA
         {totalExtraMes > 0 && <Fila l="+ Ingresos adicionales" v={"+" + eur(totalExtraMes)} c={T.accent} />}
         <Fila l="− Gastos del mes" v={"−" + eur(totalGastosMes)} c={T.mid} />
         {totalPuntuales > 0 && <Fila l="− Puntuales" v={"−" + eur(totalPuntuales)} c={T.mid} />}
-        <Fila l="− Apartado (anuales + objetivos)" v={"−" + eur(apartados)} c={T.warn} />
         <div style={{ height: 1, background: T.line, margin: "8px 0" }} />
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 14 }}>
           <span style={{ fontFamily: T.ui, fontSize: 13, fontWeight: 700, color: T.text }}>Margen del mes</span>
@@ -843,7 +874,6 @@ function Resumen(x) {
         <div style={{ fontFamily: T.ui, fontSize: 12, fontWeight: 700, color: T.text, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 12, display: "flex", alignItems: "center", gap: 8 }}><Icon n="ingreso" s={16} c={T.accent} /> Flujo mensual</div>
         <Fila l="Ingresos" v={eur(x.ingresoMes)} c={T.accent} />
         <Fila l="− Gastos (fijos + prescindibles)" v={"−" + eur(x.gastoCorriente)} c={T.mid} />
-        <Fila l={"− Apartar anuales" + (x.autoAnual ? " → " + x.bancoAnual : " (manual)")} v={"−" + eur(x.compAnual)} c={x.autoAnual ? T.warn : T.dim} />
         <div style={{ height: 1, background: T.line, margin: "8px 0" }} />
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}><span style={{ fontFamily: T.ui, fontSize: 13, fontWeight: 700, color: T.text }}>Te queda libre</span><span style={{ fontFamily: T.serif, fontSize: 26, color: x.ahorroLibre >= 0 ? T.accent : T.neg }}>{x.ahorroLibre >= 0 ? "+" : ""}{eur(x.ahorroLibre)}</span></div>
       </Panel>

@@ -64,7 +64,7 @@ const TIPOS_ACTIVO = {
   bono:   { label: "Bono",   color: "#6A4C93", icono: "📜" },
 };
 const TIPOS_UNIDADES = ["etf", "accion", "cripto"]; // se introducen por cantidad × precio; fondo/bono por importe directo
-const APP_VERSION = "v49-econ7";
+const APP_VERSION = "v50-econ8";
 const nuevoMes = () => new Date().getMonth();
 const VACIO = { mes: nuevoMes(), bancos: [], inversiones: [], ingresos: [], objetivos: [], fijos: [], variables: [], anuales: [], inmuebles: [], deudas: [], presupuestos: [], puntuales: {}, ingresosMes: {}, provisionPagos: {}, cerrados: [],
   criterios: { mesesEmergencia: 6, proMesLimite: 10, proRedondeo: 50, proBolsa: null, proExtraPct: 42.86, bancoNomina: null, autoAnual: false, autoAnualBanco: null, presImprevistos: 10, presRedondeo: 50 } };
@@ -491,6 +491,12 @@ function App() {
                       <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 8, padding: "7px 10px", background: `${T.warn}10`, borderRadius: 8, border: `1px solid ${T.warn}44` }}>
                         <Icon n="info" s={14} c={T.warn} />
                         <span style={{ fontFamily: T.ui, fontSize: 10.5, color: T.warn, lineHeight: 1.4 }}>Este objetivo no tiene un banco válido. Elige uno en "Ahorra en" para que se creen la bolsa y el gasto fijo.</span>
+                      </div>
+                    )}
+                    {o.auto && bancoExiste(o.banco) && (
+                      <div style={{ display: "flex", alignItems: "flex-start", gap: 7, marginBottom: 8, padding: "7px 10px", background: `${T.accent}0a`, borderRadius: 8, border: `1px solid ${T.accent}33` }}>
+                        <Icon n="check" s={14} c={T.accent} />
+                        <span style={{ fontFamily: T.ui, fontSize: 10.5, color: T.mid, lineHeight: 1.45 }}>Activo: bolsa de <b style={{ color: T.accent }}>{eur(n(o.ahorrado))}</b> dentro de {nombreBanco(o.banco)} (bloque Bancos) y gasto fijo de <b style={{ color: T.accent }}>{eur(cuotaObjRed(o))}/mes</b> en Gastos mensuales → Ahorro automático.</span>
                       </div>
                     )}
                     <div style={{ height: 5, background: T.surface2, borderRadius: 3, overflow: "hidden", marginBottom: 6 }}><div style={{ width: pct + "%", height: "100%", background: T.accent, borderRadius: 3 }} /></div>

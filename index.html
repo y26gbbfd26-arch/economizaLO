@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, user-scalable=no" />
+  <meta name="theme-color" content="#FFFFFF" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="economízalo" />
+  <meta name="mobile-web-app-capable" content="yes" />
+
+  <link rel="manifest" href="./manifest.json" />
+  <link rel="apple-touch-icon" href="./icon-192.png" />
+  <link rel="icon" type="image/png" href="./icon-192.png" />
+
+  <title>economízalo</title>
+
+  <style>
+    html, body { margin: 0; padding: 0; background: #FFFFFF; overscroll-behavior: none; }
+    body { padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
+    #root { min-height: 100vh; }
+    .loader {
+      display: flex; align-items: center; justify-content: center;
+      min-height: 100vh; color: #2D5E3F; font-family: monospace; font-size: 14px;
+    }
+  </style>
+</head>
+<body>
+  <div id="root">
+    <div class="loader" id="loader">cargando…</div>
+  </div>
+
+  <!-- Diagnóstico: si algo falla, mostrarlo en pantalla en vez de quedarse en "cargando…" -->
+  <script>
+    (function () {
+      function mostrarError(titulo, detalle) {
+        var root = document.getElementById("root");
+        if (!root) return;
+        root.innerHTML =
+          '<div style="min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;' +
+          'padding:24px;color:#1A1A18;font-family:system-ui,sans-serif;text-align:center;gap:12px;background:#0A1410">' +
+          '<div style="font-size:15px;font-weight:700;color:#E8765A">' + titulo + '</div>' +
+          '<div style="font-size:12px;color:#4C4C40;max-width:340px;line-height:1.5">' + detalle + '</div>' +
+          '<button onclick="location.reload()" style="margin-top:8px;background:#74C69D;color:#0A1410;border:none;' +
+          'border-radius:999px;padding:12px 32px;font-size:14px;font-weight:700;cursor:pointer;background:#2D5E3F;color:#fff">Reintentar</button>' +
+          '</div>';
+      }
+      // Captura errores de ejecución de la app
+      window.addEventListener("error", function (e) {
+        if (e && e.message && /Script error/i.test(e.message)) return;
+        mostrarError("La app no pudo cargar", (e && e.message ? e.message : "Error desconocido") +
+          ". Prueba a reintentar; si persiste, desinstala y reinstala la app.");
+      });
+      window.addEventListener("unhandledrejection", function (e) {
+        mostrarError("La app no pudo cargar", (e && e.reason && e.reason.message ? e.reason.message : "Error de carga") + ".");
+      });
+      // Si pasados unos segundos seguimos en "cargando…", diagnosticar la causa
+      window.__appMontada = false;
+      setTimeout(function () {
+        if (window.__appMontada) return;
+        if (typeof React === "undefined" || typeof ReactDOM === "undefined" || typeof Babel === "undefined") {
+          mostrarError("No se pudieron cargar las librerías",
+            "Parece que no hay conexión o el CDN está bloqueado. Conéctate a internet la primera vez y reintenta.");
+        } else {
+          mostrarError("La app tardó demasiado en cargar",
+            "Puede ser un despliegue de GitHub en curso o la caché. Espera 1-2 min y reintenta, o reinstala la app.");
+        }
+      }, 9000);
+    })();
+  </script>
+
+  <!-- React desde CDN -->
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <!-- Babel para compilar JSX directamente en el navegador -->
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <!-- Cargador de la app: lee app.jsx forzando UTF-8 (no depende de la cabecera del servidor) -->
+  <script>
+    (async function () {
+      function fallo(titulo, detalle) {
+        var ev = new ErrorEvent("error", { message: titulo + " — " + detalle });
+        window.dispatchEvent(ev);
+      }
+      try {
+        if (typeof Babel === "undefined" || typeof React === "undefined") {
+          fallo("No se pudieron cargar las librerías", "Sin conexión o CDN bloqueado");
+          return;
+        }
+        // Descargar el código y decodificarlo SIEMPRE como UTF-8
+        var resp = await fetch("./app.jsx", { cache: "no-store" });
+        if (!resp.ok) { fallo("No se pudo descargar app.jsx", "HTTP " + resp.status); return; }
+        var buf = await resp.arrayBuffer();
+        var fuente = new TextDecoder("utf-8").decode(buf);
+        // Transformar JSX -> JS con Babel
+        var salida = Babel.transform(fuente, {
+          presets: [["react", { runtime: "classic" }]],
+          filename: "app.jsx",
+        }).code;
+        // Ejecutar
+        var s = document.createElement("script");
+        s.textContent = salida;
+        document.body.appendChild(s);
+      } catch (err) {
+        fallo("Error al iniciar la app", (err && err.message) ? err.message : String(err));
+      }
+    })();
+  </script>
+
+  <!-- Registrar service worker y detectar actualizaciones -->
+  <script>
+    if ("serviceWorker" in navigator) {
+      window.addEventListener("load", async () => {
+        try {
+          const reg = await navigator.serviceWorker.register("./service-worker.js");
+          console.log("SW registrado", reg.scope);
+
+          // Forzar comprobación de actualización cada vez que se abre la app
+          reg.update();
+
+          // Si encuentra una nueva versión esperando, activarla
+          if (reg.waiting) reg.waiting.postMessage({ type: "SKIP_WAITING" });
+
+          // Si llega una nueva versión durante la sesión, recargar para usarla
+          reg.addEventListener("updatefound", () => {
+            const nuevo = reg.installing;
+            if (!nuevo) return;
+            nuevo.addEventListener("statechange", () => {
+              if (nuevo.state === "installed" && navigator.serviceWorker.controller) {
+                nuevo.postMessage({ type: "SKIP_WAITING" });
+              }
+            });
+          });
+
+          // Cuando el SW toma control de una versión nueva, recargar la página
+          let recargando = false;
+          navigator.serviceWorker.addEventListener("controllerchange", () => {
+            if (recargando) return;
+            recargando = true;
+            window.location.reload();
+          });
+        } catch (err) {
+          console.error("SW error", err);
+        }
+      });
+    }
+  </script>
+</body>
+</html>

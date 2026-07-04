@@ -17,7 +17,8 @@ const T = {
 };
 const MESES = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"];
 const eur = (n) => Math.round(n || 0).toLocaleString("es-ES") + "€";
-const uid = () => Math.random().toString(36).slice(2, 8);
+let _uidSeq = 0;
+const uid = () => "x" + Date.now().toString(36) + "-" + (_uidSeq++).toString(36) + "-" + Math.random().toString(36).slice(2, 8);
 const red = (x, r) => (r > 0 ? Math.ceil(x / r) * r : Math.round(x));
 const numf = (v) => { const n = parseFloat(String(v).replace(",", ".")); return isNaN(n) ? 0 : n; };
 
@@ -150,7 +151,16 @@ function Del({ onClick, s = 30 }) {
 function Vacio({ txt }) { return <div style={{ fontFamily: T.ui, fontSize: 11.5, color: T.dim, textAlign: "center", padding: "6px 0 10px", lineHeight: 1.5 }}>{txt}</div>; }
 
 const STORAGE_KEY = "economizalo-v1";
-function cargarDatos() { try { const s = localStorage.getItem(STORAGE_KEY); return s ? { ...VACIO, ...JSON.parse(s) } : VACIO; } catch (e) { return VACIO; } }
+// Repara ids duplicados o vacíos (versiones antiguas usaban un generador que podía colisionar)
+function normalizarIds(dd) {
+  const vistos = new Set();
+  const arreglaLista = (arr) => { if (!Array.isArray(arr)) return; arr.forEach((it) => { if (!it || typeof it !== "object") return; if (!it.id || vistos.has(it.id)) it.id = uid(); vistos.add(it.id); if (Array.isArray(it.reservas)) it.reservas.forEach((r) => { if (r && (!r.id || vistos.has(r.id))) r.id = uid(); if (r) vistos.add(r.id); }); if (Array.isArray(it.conceptos)) it.conceptos.forEach((x) => { if (x && (!x.id || vistos.has(x.id))) x.id = uid(); if (x) vistos.add(x.id); if (Array.isArray(x.pagos)) x.pagos.forEach((p) => { if (p && (!p.id || vistos.has(p.id))) p.id = uid(); if (p) vistos.add(p.id); }); }); if (Array.isArray(it.articulos)) it.articulos.forEach((a) => { if (a && (!a.id || vistos.has(a.id))) a.id = uid(); if (a) vistos.add(a.id); }); }); };
+  ["bancos", "inversiones", "ingresos", "objetivos", "fijos", "variables", "anuales", "inmuebles", "deudas", "presupuestos"].forEach((k) => arreglaLista(dd[k]));
+  Object.values(dd.puntuales || {}).forEach(arreglaLista);
+  Object.values(dd.ingresosMes || {}).forEach(arreglaLista);
+  return dd;
+}
+function cargarDatos() { try { const s = localStorage.getItem(STORAGE_KEY); return s ? normalizarIds({ ...VACIO, ...JSON.parse(s) }) : VACIO; } catch (e) { return VACIO; } }
 function guardarDatos(dd) { try { localStorage.setItem(STORAGE_KEY, JSON.stringify(dd)); } catch (e) {} }
 
 function App() {
@@ -170,8 +180,8 @@ function App() {
   const cuotaObj = (o) => Math.max(0, (n(o.meta) - n(o.ahorrado))) / Math.max(1, n(o.meses));
   const cuotaObjRed = (o) => red(cuotaObj(o), 50);
   // Un objetivo automatizado genera un gasto fijo (la cuota) y una bolsa de reserva (lo ahorrado) en su banco
-  const objsAuto = d.objetivos.filter((o) => o.auto && o.banco);
-  const fijosObjetivo = objsAuto.map((o) => ({ id: "obj-" + o.id, nombre: "Ahorro: " + (o.nombre || "objetivo"), importe: cuotaObjRed(o), banco: o.banco, esObjetivo: true, pagados: [] }));
+  const objsAuto = d.objetivos.filter((o) => o.auto && o.banco && d.bancos.some((b) => b.id === o.banco));
+  const fijosObjetivo = objsAuto.map((o) => ({ id: "obj-" + o.id, objetivoId: o.id, nombre: "Ahorro: " + (o.nombre || "objetivo"), importe: cuotaObjRed(o), banco: o.banco, esObjetivo: true, pagados: Object.keys(o.aportaciones || {}).map(Number) }));
   const fijosEfectivos = [...d.fijos, ...fijosObjetivo];
   const totFijos = fijosEfectivos.reduce((a, g) => a + n(g.importe), 0);
   const totVar = d.variables.reduce((a, g) => a + n(g.importe), 0);
@@ -319,7 +329,7 @@ function App() {
             <Bloque icon="banco" titulo="Bancos y saldos" sub="Saldo real, compartidas y bolsas" total={saldoTotal} abierto={!!abiertos.bancos} onTog={() => tog("bancos")} vacio={d.bancos.length === 0}>
               {d.bancos.length === 0 && <Vacio txt="Añade el primer banco con el saldo que tienes ahora mismo. Dentro puedes crear bolsas de reserva (dinero apartado)." />}
               {d.bancos.map((b) => {
-                const resB = b.reservas.reduce((a, r) => a + n(r.importe), 0);
+                const resB = b.reservas.reduce((a, r) => a + n(r.importe), 0) + bolsasObjetivo.filter((x) => x.banco === b.id).reduce((a, x) => a + n(x.importe), 0);
                 return (
                   <div key={b.id} style={{ background: T.surface, borderRadius: 12, padding: 12, marginBottom: 10, border: `1px solid ${T.line}` }}>
                     <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8 }}>
@@ -345,6 +355,14 @@ function App() {
                         </div>
                       ))}
                       <button onClick={() => upd((c) => { c.bancos.find((x) => x.id === b.id).reservas.push({ id: uid(), nombre: "", importe: 0 }); })} style={{ background: "none", border: "none", color: T.accent, fontFamily: T.ui, fontSize: 11, fontWeight: 600, cursor: "pointer", padding: "4px 0" }}>+ bolsa</button>
+                      {bolsasObjetivo.filter((x) => x.banco === b.id).map((x) => (
+                        <div key={x.id} style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 6, padding: "7px 9px", background: `${T.accentSoft}0f`, borderRadius: 8, border: `1px dashed ${T.accentSoft}55` }}>
+                          <Icon n="objetivo" s={13} c={T.accentSoft} />
+                          <span style={{ flex: 1, fontFamily: T.ui, fontSize: 11.5, color: T.mid }}>{x.nombre}</span>
+                          <span style={{ fontFamily: T.ui, fontSize: 8.5, fontWeight: 700, color: T.accentSoft, background: `${T.accentSoft}1e`, borderRadius: 4, padding: "2px 5px", textTransform: "uppercase" }}>auto</span>
+                          <span style={{ fontFamily: T.mono, fontSize: 12, fontWeight: 600, color: T.mid }}>{eur(x.importe)}</span>
+                        </div>
+                      ))}
                       <div style={{ fontFamily: T.mono, fontSize: 10.5, color: T.dim, marginTop: 4 }}>Disponible: <span style={{ color: T.accent }}>{eur(n(b.saldo) - resB)}</span></div>
                     </div>
                   </div>
@@ -456,7 +474,25 @@ function App() {
 
             <Bloque icon="gasto" titulo="Gastos mensuales" sub="Fijos y prescindibles · con banco de pago" total={totFijos + totVar} abierto={!!abiertos.gm} onTog={() => tog("gm")} vacio={d.fijos.length === 0 && d.variables.length === 0}>
               {d.fijos.length === 0 && d.variables.length === 0 && <Vacio txt="Añade tus gastos recurrentes e indica de qué banco sale cada uno (para el reparto del mes)." />}
-              <SubLista d={d} upd={upd} campo="fijos" label="Fijos mensuales" total={totFijos} bancoOpts={bancoOptsN} />
+              <SubLista d={d} upd={upd} campo="fijos" label="Fijos mensuales" total={d.fijos.reduce((a, g) => a + n(g.importe), 0)} bancoOpts={bancoOptsN} />
+              {fijosObjetivo.length > 0 && (
+                <div style={{ marginBottom: 14 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 8 }}>
+                    <span style={{ fontFamily: T.ui, fontSize: 11, fontWeight: 700, color: T.mid, textTransform: "uppercase", letterSpacing: "0.05em" }}>Ahorro de objetivos</span>
+                    <span style={{ fontFamily: T.mono, fontSize: 12, color: T.dim }}>{eur(cuotaObjAutoTotal)}</span>
+                  </div>
+                  {fijosObjetivo.map((g) => (
+                    <div key={g.id} style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 6, padding: "8px 10px", background: `${T.accentSoft}0f`, borderRadius: 9, border: `1px dashed ${T.accentSoft}55` }}>
+                      <Icon n="objetivo" s={14} c={T.accentSoft} />
+                      <span style={{ flex: 1, fontFamily: T.ui, fontSize: 12.5, color: T.mid }}>{g.nombre}</span>
+                      <span style={{ fontFamily: T.ui, fontSize: 8.5, fontWeight: 700, color: T.accentSoft, background: `${T.accentSoft}1e`, borderRadius: 4, padding: "2px 5px", textTransform: "uppercase" }}>auto</span>
+                      <span style={{ fontFamily: T.mono, fontSize: 9.5, color: T.dim, background: T.surface2, borderRadius: 5, padding: "2px 6px" }}>{nombreBanco(g.banco)}</span>
+                      <span style={{ fontFamily: T.mono, fontSize: 12.5, fontWeight: 600, color: T.mid }}>{eur(g.importe)}</span>
+                    </div>
+                  ))}
+                  <div style={{ fontFamily: T.ui, fontSize: 10, color: T.dim, marginTop: 2 }}>Generados por objetivos automatizados. Se editan desde su objetivo.</div>
+                </div>
+              )}
               <SubLista d={d} upd={upd} campo="variables" label="Prescindibles" total={totVar} bancoOpts={bancoOptsN} />
             </Bloque>
 
@@ -620,7 +656,24 @@ function VistaMes({ d, upd, n, ingresoMes, totFijos, totVar, apartarAnual, compA
   const pagadoMes = pagados.reduce((a, g) => a + n(g.importe), 0);
   const apartados = compAnual;
   const margen = ingresoTotalMes - totalGastosMes - totalPuntuales - apartados;
-  const togglePago = (id, tipo) => upd((c) => { if (String(id).startsWith("obj-")) return; const arr = tipo === "F" ? c.fijos : c.variables; const g = arr.find((x) => x.id === id); if (!g) return; g.pagados = g.pagados || []; g.pagados = g.pagados.includes(c.mes) ? g.pagados.filter((m) => m !== c.mes) : [...g.pagados, c.mes]; });
+  const togglePago = (id, tipo) => upd((c) => {
+    if (String(id).startsWith("obj-")) {
+      const oid = String(id).slice(4);
+      const o = c.objetivos.find((y) => y.id === oid);
+      if (!o) return;
+      o.aportaciones = o.aportaciones || {};
+      if (o.aportaciones[c.mes] != null) {
+        o.ahorrado = numf(o.ahorrado) - numf(o.aportaciones[c.mes]);
+        delete o.aportaciones[c.mes];
+      } else {
+        const cuota = red(Math.max(0, numf(o.meta) - numf(o.ahorrado)) / Math.max(1, numf(o.meses)), 50);
+        o.aportaciones[c.mes] = cuota;
+        o.ahorrado = numf(o.ahorrado) + cuota;
+      }
+      return;
+    }
+    const arr = tipo === "F" ? c.fijos : c.variables; const g = arr.find((x) => x.id === id); if (!g) return; g.pagados = g.pagados || []; g.pagados = g.pagados.includes(c.mes) ? g.pagados.filter((m) => m !== c.mes) : [...g.pagados, c.mes];
+  });
   const cerrarMes = () => upd((c) => { c.cerrados = c.cerrados.includes(c.mes) ? c.cerrados.filter((m) => m !== c.mes) : [...c.cerrados, c.mes]; });
 
   return (
@@ -662,11 +715,12 @@ function VistaMes({ d, upd, n, ingresoMes, totFijos, totVar, apartarAnual, compA
         {gastosMes.map((g) => {
           const ok = (g.pagados || []).includes(d.mes);
           return (
-            <div key={g.id + g.tipo} onClick={() => togglePago(g.id, g.tipo)} style={{ display: "flex", alignItems: "center", gap: 11, padding: "9px 0", borderBottom: `1px solid ${T.line}`, cursor: g.esObjetivo ? "default" : "pointer" }}>
-              <div style={{ width: 22, height: 22, borderRadius: 7, border: `1.5px solid ${g.esObjetivo ? T.accentSoft : ok ? T.accent : T.border}`, background: g.esObjetivo ? `${T.accentSoft}22` : ok ? T.accent : "transparent", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{g.esObjetivo ? <Icon n="objetivo" s={12} c={T.accentSoft} /> : ok && <Icon n="check" s={13} c="#fff" sw={2.5} />}</div>
-              <span style={{ flex: 1, fontFamily: T.ui, fontSize: 13, color: ok && !g.esObjetivo ? T.dim : T.text, textDecoration: ok && !g.esObjetivo ? "line-through" : "none" }}>{g.nombre || "(sin nombre)"}</span>
+            <div key={g.id + g.tipo} onClick={() => togglePago(g.id, g.tipo)} style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 0", borderBottom: `1px solid ${T.line}`, cursor: "pointer" }}>
+              <div style={{ width: 22, height: 22, borderRadius: 7, border: `1.5px solid ${ok ? (g.esObjetivo ? T.accentSoft : T.accent) : T.border}`, background: ok ? (g.esObjetivo ? T.accentSoft : T.accent) : "transparent", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{ok && <Icon n="check" s={13} c="#fff" sw={2.5} />}</div>
+              <span style={{ flex: 1, fontFamily: T.ui, fontSize: 13, color: ok ? T.dim : T.text, textDecoration: ok ? "line-through" : "none" }}>{g.nombre || "(sin nombre)"}</span>
+              {g.esObjetivo && <span style={{ fontFamily: T.ui, fontSize: 8.5, fontWeight: 700, color: T.accentSoft, background: `${T.accentSoft}1e`, borderRadius: 4, padding: "2px 5px", textTransform: "uppercase", letterSpacing: "0.04em" }}>auto</span>}
               <span style={{ fontFamily: T.mono, fontSize: 9.5, color: T.dim, background: T.surface2, borderRadius: 5, padding: "2px 6px" }}>{nombreBanco(g.banco)}</span>
-              <span style={{ fontFamily: T.mono, fontSize: 12.5, fontWeight: 600, color: ok && !g.esObjetivo ? T.dim : T.mid, width: 62, textAlign: "right" }}>{eur(g.importe)}</span>
+              <span style={{ fontFamily: T.mono, fontSize: 12.5, fontWeight: 600, color: ok ? T.dim : T.mid, width: 62, textAlign: "right" }}>{eur(g.importe)}</span>
             </div>
           );
         })}

@@ -64,6 +64,7 @@ const TIPOS_ACTIVO = {
   bono:   { label: "Bono",   color: "#6A4C93", icono: "📜" },
 };
 const TIPOS_UNIDADES = ["etf", "accion", "cripto"]; // se introducen por cantidad × precio; fondo/bono por importe directo
+const APP_VERSION = "v48-econ6";
 const nuevoMes = () => new Date().getMonth();
 const VACIO = { mes: nuevoMes(), bancos: [], inversiones: [], ingresos: [], objetivos: [], fijos: [], variables: [], anuales: [], inmuebles: [], deudas: [], presupuestos: [], puntuales: {}, ingresosMes: {}, cerrados: [],
   criterios: { mesesEmergencia: 6, proMesLimite: 10, proRedondeo: 50, proBolsa: null, proExtraPct: 42.86, bancoNomina: null, autoAnual: false, autoAnualBanco: null, presImprevistos: 10, presRedondeo: 50 } };
@@ -288,7 +289,7 @@ function App() {
             <button onClick={borrarTodo} style={{ width: "100%", display: "flex", alignItems: "center", gap: 12, background: `${T.neg}0d`, border: `1px solid ${T.neg}33`, borderRadius: 12, padding: "13px 14px", cursor: "pointer" }}>
               <Icon n="x" s={19} c={T.neg} /><div style={{ textAlign: "left" }}><div style={{ fontFamily: T.ui, fontSize: 13, fontWeight: 600, color: T.neg }}>Borrar y empezar de cero</div><div style={{ fontFamily: T.ui, fontSize: 10.5, color: T.dim }}>Elimina todos los datos de este dispositivo</div></div>
             </button>
-            <div style={{ fontFamily: T.mono, fontSize: 9.5, color: T.dim, textAlign: "center", marginTop: 16 }}>economízalo · v1.0</div>
+            <div style={{ fontFamily: T.mono, fontSize: 9.5, color: T.dim, textAlign: "center", marginTop: 16 }}>economízalo · {APP_VERSION}</div>
           </div>
         </div>
       )}

@@ -64,12 +64,12 @@ const TIPOS_ACTIVO = {
   bono:   { label: "Bono",   color: "#6A4C93", icono: "📜" },
 };
 const TIPOS_UNIDADES = ["etf", "accion", "cripto"]; // se introducen por cantidad × precio; fondo/bono por importe directo
-const APP_VERSION = "v52-econ10";
+const APP_VERSION = "v53-econ11";
 const nuevoMes = () => new Date().getMonth();
-const VACIO = { mes: nuevoMes(), bancos: [], inversiones: [], ingresos: [], objetivos: [], fijos: [], variables: [], anuales: [], inmuebles: [], deudas: [], presupuestos: [], puntuales: {}, ingresosMes: {}, provisionPagos: {}, cerrados: [],
+const VACIO = { mes: nuevoMes(), mesActivo: nuevoMes(), plan: null, bancos: [], inversiones: [], ingresos: [], objetivos: [], fijos: [], variables: [], anuales: [], inmuebles: [], deudas: [], presupuestos: [], puntuales: {}, ingresosMes: {}, provisionPagos: {}, cerrados: [],
   criterios: { mesesEmergencia: 6, fondoBanco: null, proMesLimite: 10, proRedondeo: 50, proBolsa: null, proExtraPct: 42.86, bancoNomina: null, autoAnual: false, autoAnualBanco: null, presImprevistos: 10, presRedondeo: 50 } };
 
-const EJEMPLO = { mes: nuevoMes(), cerrados: [],
+const EJEMPLO = { mes: nuevoMes(), mesActivo: nuevoMes(), plan: null, cerrados: [],
   inmuebles: [{ id: "in1", nombre: "Vivienda", valor: 145000 }],
   deudas: [{ id: "de1", nombre: "Hipoteca pendiente", importe: 82000 }],
   presupuestos: [{ id: "pr1", nombre: "Terraza", articulos: [{ id: "ar1", nombre: "Sofá exterior", uds: 1, precio: 650 }, { id: "ar2", nombre: "Mesa", uds: 1, precio: 180 }], imprevistos: 10, incorporado: false }],
@@ -679,8 +679,28 @@ function App() {
   );
 }
 
-function VistaMes({ d, upd, n, ingresoMes, totFijos, totVar, apartarAnual, fijosEfectivos, cuotaObjAutoTotal, nombreBanco }) {
+function Seccion({ icon, titulo, extra, abierto, onTog, children }) {
+  return (
+    <div style={{ background: T.panel, border: `1px solid ${T.border}`, borderRadius: 16, marginBottom: 12, boxShadow: T.shadow, overflow: "hidden" }}>
+      <div onClick={onTog} style={{ display: "flex", alignItems: "center", gap: 9, padding: "14px 18px", cursor: "pointer" }}>
+        <Icon n={icon} s={16} c={T.accent} />
+        <span style={{ flex: 1, fontFamily: T.ui, fontSize: 12, fontWeight: 700, color: T.text, textTransform: "uppercase", letterSpacing: "0.05em" }}>{titulo}</span>
+        {extra != null && <span style={{ fontFamily: T.mono, fontSize: 11, color: T.dim, marginRight: 2 }}>{extra}</span>}
+        <div style={{ transform: abierto ? "rotate(180deg)" : "none", transition: "transform 0.2s" }}><Icon n="chevron" s={15} c={T.dim} /></div>
+      </div>
+      {abierto && <div style={{ padding: "0 18px 16px" }}>{children}</div>}
+    </div>
+  );
+}
+
+function VistaMes({ d, upd, n, ingresoMes, apartarAnual, fijosEfectivos, nombreBanco }) {
+  const [ab, setAb] = useState({});
+  const abierto = (k) => (ab[k] == null ? true : ab[k]);
+  const togL = (k) => setAb((s) => ({ ...s, [k]: !(s[k] == null ? true : s[k]) }));
   if (d.bancos.length === 0) return <div style={{ fontFamily: T.ui, fontSize: 12.5, color: T.dim, textAlign: "center", padding: "40px 20px", lineHeight: 1.6 }}>Primero añade tus bancos, ingresos y gastos en <b style={{ color: T.accent }}>Datos</b>.<br />Aquí harás el seguimiento de cada mes.</div>;
+  const mesActivo = d.mesActivo == null ? d.mes : d.mesActivo;
+  const esActivo = d.mes === mesActivo;
+  const soloLectura = !esActivo;
   const cerrado = d.cerrados.includes(d.mes);
   const mesKey = String(d.mes);
   const puntualesMes = (d.puntuales && d.puntuales[mesKey]) || [];
@@ -690,24 +710,34 @@ function VistaMes({ d, upd, n, ingresoMes, totFijos, totVar, apartarAnual, fijos
   const ingresoTotalMes = ingresoMes + totalExtraMes;
   const pagadoDe = (x) => x.pagos.reduce((a, p) => a + n(p.importe), 0);
   const anualesPagadosMes = d.anuales.reduce((a, c) => a + c.conceptos.reduce((s, x) => s + x.pagos.filter((p) => p.mes === d.mes).reduce((q, p) => q + n(p.importe), 0), 0), 0);
-  // Reparto por banco: cada banco necesita = sus gastos fijos (incluidas cuotas de objetivos automatizados) + prescindibles + prorrateo si le toca
+  // Plan congelado al cerrar el mes anterior: sus cifras mandan sobre las vivas en el ahorro automático de este mes
+  const plan = d.plan && d.plan.mes === d.mes ? d.plan : null;
+  const conPlan = (g) => {
+    if (plan && g.esObjetivo && plan.cuotas && plan.cuotas[g.objetivoId] != null) return { ...g, importe: plan.cuotas[g.objetivoId] };
+    if (plan && g.esAnual && plan.apartarAnual != null) return { ...g, importe: plan.apartarAnual };
+    return g;
+  };
+  const fijosDelMes = fijosEfectivos.map(conPlan);
   const necesita = (bid) => {
-    const gf = fijosEfectivos.filter((f) => f.banco === bid).reduce((a, f) => a + n(f.importe), 0);
+    const gf = fijosDelMes.filter((f) => f.banco === bid).reduce((a, f) => a + n(f.importe), 0);
     const gv = d.variables.filter((v) => v.banco === bid).reduce((a, v) => a + n(v.importe), 0);
     return { gf, gv, total: gf + gv };
   };
   const bancoNom = d.criterios.bancoNomina;
   const totalReparto = d.bancos.reduce((a, b) => a + necesita(b.id).total, 0);
-  // Gastos del mes (fijos efectivos + prescindibles) con estado pagado
-  const gastosMes = [...fijosEfectivos.map((g) => ({ ...g, tipo: "F" })), ...d.variables.map((g) => ({ ...g, tipo: "V" }))];
+  const gastosMes = [...fijosDelMes.map((g) => ({ ...g, tipo: "F" })), ...d.variables.map((g) => ({ ...g, tipo: "V" }))];
   const pagados = gastosMes.filter((g) => (g.pagados || []).includes(d.mes));
   const totalGastosMes = gastosMes.reduce((a, g) => a + n(g.importe), 0);
   const pagadoMes = pagados.reduce((a, g) => a + n(g.importe), 0);
   const margen = ingresoTotalMes - totalGastosMes - totalPuntuales;
-  const togglePago = (id, tipo) => upd((c) => {
+  const togglePago = (id, tipo) => { if (soloLectura) return; upd((c) => {
     if (id === "anual-auto") {
+      const imp = numf(plan && plan.apartarAnual != null ? plan.apartarAnual : apartarAnual);
       c.provisionPagos = c.provisionPagos || {};
-      if (c.provisionPagos[c.mes] != null) { delete c.provisionPagos[c.mes]; } else { c.provisionPagos[c.mes] = apartarAnual; }
+      const bolsaId = c.criterios.proBolsa;
+      const aplica = (delta) => { if (!bolsaId) return; c.bancos.forEach((b) => { const r = (b.reservas || []).find((x) => x.id === bolsaId); if (r) r.importe = Math.max(0, numf(r.importe) + delta); }); };
+      if (c.provisionPagos[c.mes] != null) { aplica(-numf(c.provisionPagos[c.mes])); delete c.provisionPagos[c.mes]; }
+      else { c.provisionPagos[c.mes] = imp; aplica(imp); }
       return;
     }
     if (String(id).startsWith("obj-")) {
@@ -715,28 +745,37 @@ function VistaMes({ d, upd, n, ingresoMes, totFijos, totVar, apartarAnual, fijos
       const o = c.objetivos.find((y) => y.id === oid);
       if (!o) return;
       o.aportaciones = o.aportaciones || {};
-      if (o.aportaciones[c.mes] != null) {
-        o.ahorrado = numf(o.ahorrado) - numf(o.aportaciones[c.mes]);
-        delete o.aportaciones[c.mes];
-      } else {
-        const cuota = red(Math.max(0, numf(o.meta) - numf(o.ahorrado)) / Math.max(1, numf(o.meses)), 50);
-        o.aportaciones[c.mes] = cuota;
-        o.ahorrado = numf(o.ahorrado) + cuota;
-      }
+      if (o.aportaciones[c.mes] != null) { o.ahorrado = numf(o.ahorrado) - numf(o.aportaciones[c.mes]); delete o.aportaciones[c.mes]; }
+      else { const g = fijosDelMes.find((x) => x.id === id); const cuota = numf(g ? g.importe : 0); o.aportaciones[c.mes] = cuota; o.ahorrado = numf(o.ahorrado) + cuota; }
       return;
     }
     const arr = tipo === "F" ? c.fijos : c.variables; const g = arr.find((x) => x.id === id); if (!g) return; g.pagados = g.pagados || []; g.pagados = g.pagados.includes(c.mes) ? g.pagados.filter((m) => m !== c.mes) : [...g.pagados, c.mes];
+  }); };
+  const sig = (d.mes + 1) % 12;
+  const cerrarYAvanzar = () => upd((c) => {
+    if (!c.cerrados.includes(c.mes)) c.cerrados = [...c.cerrados, c.mes];
+    const cuotas = {}; fijosEfectivos.forEach((g) => { if (g.esObjetivo) cuotas[g.objetivoId] = numf(g.importe); });
+    c.plan = { mes: (c.mes + 1) % 12, cuotas, apartarAnual: numf(apartarAnual), origen: c.mes };
+    c.mesActivo = (c.mes + 1) % 12;
+    c.mes = c.mesActivo;
   });
-  const cerrarMes = () => upd((c) => { c.cerrados = c.cerrados.includes(c.mes) ? c.cerrados.filter((m) => m !== c.mes) : [...c.cerrados, c.mes]; });
+  const reabrir = () => upd((c) => { c.cerrados = c.cerrados.filter((m) => m !== c.mes); });
+  const activarMes = () => upd((c) => { c.mesActivo = c.mes; c.cerrados = c.cerrados.filter((m) => m !== c.mes); if (c.plan && c.plan.mes !== c.mes) c.plan = null; });
 
   return (
     <>
-      <p style={{ fontFamily: T.ui, fontSize: 11.5, color: T.dim, lineHeight: 1.5, margin: "0 0 14px" }}>Seguimiento de <b style={{ color: T.accent }}>{MESES[d.mes]}</b>: reparte el ingreso, marca lo que pagas y cierra el mes.</p>
+      {soloLectura ? (
+        <div style={{ display: "flex", alignItems: "center", gap: 9, background: `${T.warn}0e`, border: `1px solid ${T.warn}44`, borderRadius: 12, padding: "10px 12px", marginBottom: 12 }}>
+          <Icon n="info" s={15} c={T.warn} />
+          <span style={{ flex: 1, fontFamily: T.ui, fontSize: 11, color: T.mid, lineHeight: 1.4 }}>Solo consulta: el mes activo es <b style={{ color: T.warn }}>{MESES[mesActivo]}</b>. Aquí no se modifica nada.</span>
+          <button onClick={activarMes} style={{ fontFamily: T.ui, fontSize: 10.5, fontWeight: 700, border: `1px solid ${T.warn}66`, background: "none", color: T.warn, borderRadius: 8, padding: "6px 10px", cursor: "pointer", flexShrink: 0 }}>Activar {MESES[d.mes]}</button>
+        </div>
+      ) : (
+        <p style={{ fontFamily: T.ui, fontSize: 11.5, color: T.dim, lineHeight: 1.5, margin: "0 0 12px" }}><b style={{ color: T.accent }}>{MESES[d.mes]}</b> es el mes activo: lo que marques aquí actualiza tus Datos.{plan && <> El ahorro automático sigue el plan congelado al cerrar {MESES[plan.origen]}.</>}</p>
+      )}
 
-      {/* Reparto por banco */}
-      <div style={{ background: T.panel, border: `1px solid ${T.border}`, borderRadius: 16, padding: "16px 18px", marginBottom: 12, boxShadow: T.shadow }}>
-        <div style={{ fontFamily: T.ui, fontSize: 12, fontWeight: 700, color: T.text, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 4, display: "flex", alignItems: "center", gap: 8 }}><Icon n="transfer" s={16} c={T.accent} /> Reparto por banco</div>
-        <div style={{ fontFamily: T.ui, fontSize: 10.5, color: T.dim, marginBottom: 12 }}>Cuánto necesita cada banco este mes para cubrir sus gastos y ahorro.</div>
+      <Seccion icon="transfer" titulo="Reparto por banco" abierto={abierto("rep")} onTog={() => togL("rep")}>
+        <div style={{ fontFamily: T.ui, fontSize: 10.5, color: T.dim, marginBottom: 10 }}>{plan ? `Con las cifras congeladas al cerrar ${MESES[plan.origen]}.` : "Con las cifras actuales (se congelarán al cerrar el mes)."}</div>
         {d.bancos.map((b) => {
           const ne = necesita(b.id); const esNom = b.id === bancoNom;
           const retiene = esNom ? ingresoTotalMes - (totalReparto - ne.total) : 0;
@@ -756,20 +795,15 @@ function VistaMes({ d, upd, n, ingresoMes, totFijos, totVar, apartarAnual, fijos
           );
         })}
         {!bancoNom && <div style={{ fontFamily: T.ui, fontSize: 10.5, color: T.warn, marginTop: 10, display: "flex", alignItems: "center", gap: 6 }}><Icon n="info" s={13} c={T.warn} /> Elige en Criterios en qué banco entra la nómina.</div>}
-      </div>
+      </Seccion>
 
-      {/* Checklist de gastos */}
-      <div style={{ background: T.panel, border: `1px solid ${T.border}`, borderRadius: 16, padding: "16px 18px", marginBottom: 12, boxShadow: T.shadow }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 12 }}>
-          <div style={{ fontFamily: T.ui, fontSize: 12, fontWeight: 700, color: T.text, textTransform: "uppercase", letterSpacing: "0.05em", display: "flex", alignItems: "center", gap: 8 }}><Icon n="check" s={16} c={T.accent} /> Gastos del mes</div>
-          <span style={{ fontFamily: T.mono, fontSize: 11, color: T.dim }}>{pagados.length}/{gastosMes.length} · {eur(pagadoMes)}/{eur(totalGastosMes)}</span>
-        </div>
+      <Seccion icon="check" titulo="Gastos del mes" extra={`${pagados.length}/${gastosMes.length} · ${eur(pagadoMes)}/${eur(totalGastosMes)}`} abierto={abierto("gas")} onTog={() => togL("gas")}>
         {gastosMes.length === 0 && <div style={{ fontFamily: T.ui, fontSize: 11.5, color: T.dim, textAlign: "center", padding: "6px 0" }}>Añade gastos mensuales en Datos.</div>}
         {gastosMes.map((g) => {
           const ok = (g.pagados || []).includes(d.mes);
           return (
-            <div key={g.id + g.tipo} onClick={() => togglePago(g.id, g.tipo)} style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 0", borderBottom: `1px solid ${T.line}`, cursor: "pointer" }}>
-              <div style={{ width: 22, height: 22, borderRadius: 7, border: `1.5px solid ${ok ? (g.esObjetivo ? T.accentSoft : T.accent) : T.border}`, background: ok ? (g.esObjetivo ? T.accentSoft : T.accent) : "transparent", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{ok && <Icon n="check" s={13} c="#fff" sw={2.5} />}</div>
+            <div key={g.id + g.tipo} onClick={() => togglePago(g.id, g.tipo)} style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 0", borderBottom: `1px solid ${T.line}`, cursor: soloLectura ? "default" : "pointer", opacity: soloLectura ? 0.75 : 1 }}>
+              <div style={{ width: 22, height: 22, borderRadius: 7, border: `1.5px solid ${ok ? (g.esObjetivo || g.esAnual ? T.accentSoft : T.accent) : T.border}`, background: ok ? (g.esObjetivo || g.esAnual ? T.accentSoft : T.accent) : "transparent", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{ok && <Icon n="check" s={13} c="#fff" sw={2.5} />}</div>
               <span style={{ flex: 1, fontFamily: T.ui, fontSize: 13, color: ok ? T.dim : T.text, textDecoration: ok ? "line-through" : "none" }}>{g.nombre || "(sin nombre)"}</span>
               {(g.esObjetivo || g.esAnual) && <span style={{ fontFamily: T.ui, fontSize: 8.5, fontWeight: 700, color: T.accentSoft, background: `${T.accentSoft}1e`, borderRadius: 4, padding: "2px 5px", textTransform: "uppercase", letterSpacing: "0.04em" }}>auto</span>}
               <span style={{ fontFamily: T.mono, fontSize: 9.5, color: T.dim, background: T.surface2, borderRadius: 5, padding: "2px 6px" }}>{nombreBanco(g.banco)}</span>
@@ -777,16 +811,12 @@ function VistaMes({ d, upd, n, ingresoMes, totFijos, totVar, apartarAnual, fijos
             </div>
           );
         })}
-      </div>
+        <div style={{ fontFamily: T.ui, fontSize: 9.5, color: T.dim, marginTop: 8 }}>Marcar una cuota "auto" de objetivo suma a su ahorrado; la provisión de anuales suma a su bolsa (si la hay en Criterios).</div>
+      </Seccion>
 
-      {/* Pagos de anuales del mes */}
       {d.anuales.length > 0 && (
-        <div style={{ background: T.panel, border: `1px solid ${T.border}`, borderRadius: 16, padding: "16px 18px", marginBottom: 12, boxShadow: T.shadow }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 10 }}>
-            <div style={{ fontFamily: T.ui, fontSize: 12, fontWeight: 700, color: T.text, textTransform: "uppercase", letterSpacing: "0.05em", display: "flex", alignItems: "center", gap: 8 }}><Icon n="anual" s={16} c={T.accent} /> Anuales de {MESES[d.mes]}</div>
-            <span style={{ fontFamily: T.mono, fontSize: 11, color: T.dim }}>{eur(anualesPagadosMes)} pagado</span>
-          </div>
-          <div style={{ fontFamily: T.ui, fontSize: 10.5, color: T.dim, marginBottom: 10 }}>Registra los gastos anuales que pagues este mes. Actualizan lo pendiente y el prorrateo. Puedes editar el importe si es un pago parcial.</div>
+        <Seccion icon="anual" titulo={`Anuales de ${MESES[d.mes]}`} extra={`${eur(anualesPagadosMes)} pagado`} abierto={abierto("anu")} onTog={() => togL("anu")}>
+          <div style={{ fontFamily: T.ui, fontSize: 10.5, color: T.dim, marginBottom: 10 }}>Registra los pagos de gastos anuales de este mes. Actualizan lo pendiente en Datos y el prorrateo.</div>
           {d.anuales.map((cat) => cat.conceptos.map((x) => {
             const pg = pagadoDe(x); const pend = Math.max(0, n(x.importe) - pg);
             const pagoMes = x.pagos.find((p) => p.mes === d.mes);
@@ -796,14 +826,13 @@ function VistaMes({ d, upd, n, ingresoMes, totFijos, totVar, apartarAnual, fijos
               <div key={x.id} style={{ padding: "8px 0", borderBottom: `1px solid ${T.line}` }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
                   <span style={{ flex: 1, fontFamily: T.ui, fontSize: 12.5, color: T.text }}>{x.nombre || "(concepto)"} <span style={{ fontFamily: T.mono, fontSize: 9, color: T.dim }}>· {cat.nombre}</span></span>
-                  {pagoMes ? (
-                    <>
-                      <Campo value={pagoMes.importe} sufijo="€" ancho={92} onChange={(v) => upd((c) => { const z = c.anuales.find((y) => y.id === cat.id).conceptos.find((w) => w.id === x.id); const p = z.pagos.find((q) => q.mes === c.mes); if (p) p.importe = v; })} />
-                      <Del s={28} onClick={() => upd((c) => { const z = c.anuales.find((y) => y.id === cat.id).conceptos.find((w) => w.id === x.id); z.pagos = z.pagos.filter((q) => q.mes !== c.mes); })} />
-                    </>
-                  ) : (
-                    <button onClick={() => upd((c) => { const z = c.anuales.find((y) => y.id === cat.id).conceptos.find((w) => w.id === x.id); z.pagos.push({ id: uid(), mes: c.mes, importe: pend }); })} style={{ fontFamily: T.ui, fontSize: 10.5, fontWeight: 700, border: "none", borderRadius: 7, padding: "6px 11px", cursor: "pointer", background: `${T.accent}14`, color: T.accent }}>Pagar {eur(pend)}</button>
-                  )}
+                  {pagoMes ? (soloLectura
+                    ? <span style={{ fontFamily: T.mono, fontSize: 11.5, color: T.accent }}>pagado {eur(pagoMes.importe)}</span>
+                    : <>
+                        <Campo value={pagoMes.importe} sufijo="€" ancho={92} onChange={(v) => upd((c) => { const z = c.anuales.find((y) => y.id === cat.id).conceptos.find((w) => w.id === x.id); const p = z.pagos.find((q) => q.mes === c.mes); if (p) p.importe = v; })} />
+                        <Del s={28} onClick={() => upd((c) => { const z = c.anuales.find((y) => y.id === cat.id).conceptos.find((w) => w.id === x.id); z.pagos = z.pagos.filter((q) => q.mes !== c.mes); })} />
+                      </>)
+                    : (!soloLectura && <button onClick={() => upd((c) => { const z = c.anuales.find((y) => y.id === cat.id).conceptos.find((w) => w.id === x.id); z.pagos.push({ id: uid(), mes: c.mes, importe: pend }); })} style={{ fontFamily: T.ui, fontSize: 10.5, fontWeight: 700, border: "none", borderRadius: 7, padding: "6px 11px", cursor: "pointer", background: `${T.accent}14`, color: T.accent }}>Pagar {eur(pend)}</button>)}
                 </div>
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                   <div style={{ flex: 1, height: 4, background: T.surface2, borderRadius: 3, overflow: "hidden" }}><div style={{ width: pct + "%", height: "100%", background: pct >= 100 ? T.accent : T.warn }} /></div>
@@ -812,17 +841,14 @@ function VistaMes({ d, upd, n, ingresoMes, totFijos, totVar, apartarAnual, fijos
               </div>
             );
           }))}
-        </div>
+        </Seccion>
       )}
 
-      {/* Ingresos adicionales del mes */}
-      <div style={{ background: T.panel, border: `1px solid ${T.border}`, borderRadius: 16, padding: "16px 18px", marginBottom: 12, boxShadow: T.shadow }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 10 }}>
-          <div style={{ fontFamily: T.ui, fontSize: 12, fontWeight: 700, color: T.text, textTransform: "uppercase", letterSpacing: "0.05em", display: "flex", alignItems: "center", gap: 8 }}><Icon n="ingreso" s={16} c={T.accent} /> Ingresos extra de {MESES[d.mes]}</div>
-          <span style={{ fontFamily: T.mono, fontSize: 11, color: T.accent }}>+{eur(totalExtraMes)}</span>
-        </div>
+      <Seccion icon="ingreso" titulo={`Ingresos extra de ${MESES[d.mes]}`} extra={"+" + eur(totalExtraMes)} abierto={abierto("ing")} onTog={() => togL("ing")}>
         <div style={{ fontFamily: T.ui, fontSize: 10.5, color: T.dim, marginBottom: 10 }}>Ingresos que solo entran este mes (paga extra, venta, devolución…). Suman al margen.</div>
-        {extraMes.map((g) => (
+        {extraMes.map((g) => soloLectura ? (
+          <Fila key={g.id} l={g.nombre || "(sin nombre)"} v={"+" + eur(g.importe)} c={T.accent} />
+        ) : (
           <div key={g.id} style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 7 }}>
             <Campo value={g.nombre} alinear="left" ph="Concepto" onChange={(v) => upd((c) => { c.ingresosMes[mesKey].find((x) => x.id === g.id).nombre = v; })} />
             <div style={{ flex: 1 }} />
@@ -830,17 +856,14 @@ function VistaMes({ d, upd, n, ingresoMes, totFijos, totVar, apartarAnual, fijos
             <Del onClick={() => upd((c) => { c.ingresosMes[mesKey] = c.ingresosMes[mesKey].filter((x) => x.id !== g.id); })} />
           </div>
         ))}
-        <AddBtn label="Añadir ingreso extra" onClick={() => upd((c) => { c.ingresosMes = c.ingresosMes || {}; c.ingresosMes[mesKey] = c.ingresosMes[mesKey] || []; c.ingresosMes[mesKey].push({ id: uid(), nombre: "", importe: 0 }); })} />
-      </div>
+        {!soloLectura && <AddBtn label="Añadir ingreso extra" onClick={() => upd((c) => { c.ingresosMes = c.ingresosMes || {}; c.ingresosMes[mesKey] = c.ingresosMes[mesKey] || []; c.ingresosMes[mesKey].push({ id: uid(), nombre: "", importe: 0 }); })} />}
+      </Seccion>
 
-      {/* Gastos puntuales del mes */}
-      <div style={{ background: T.panel, border: `1px solid ${T.border}`, borderRadius: 16, padding: "16px 18px", marginBottom: 12, boxShadow: T.shadow }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 10 }}>
-          <div style={{ fontFamily: T.ui, fontSize: 12, fontWeight: 700, color: T.text, textTransform: "uppercase", letterSpacing: "0.05em", display: "flex", alignItems: "center", gap: 8 }}><Icon n="gasto" s={16} c={T.accent} /> Puntuales de {MESES[d.mes]}</div>
-          <span style={{ fontFamily: T.mono, fontSize: 11, color: T.dim }}>{eur(totalPuntuales)}</span>
-        </div>
+      <Seccion icon="gasto" titulo={`Puntuales de ${MESES[d.mes]}`} extra={eur(totalPuntuales)} abierto={abierto("pun")} onTog={() => togL("pun")}>
         <div style={{ fontFamily: T.ui, fontSize: 10.5, color: T.dim, marginBottom: 10 }}>Gastos que solo ocurren este mes (no se repiten).</div>
-        {puntualesMes.map((g) => (
+        {puntualesMes.map((g) => soloLectura ? (
+          <Fila key={g.id} l={g.nombre || "(sin nombre)"} v={"−" + eur(g.importe)} c={T.mid} />
+        ) : (
           <div key={g.id} style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 7 }}>
             <Campo value={g.nombre} alinear="left" ph="Concepto" onChange={(v) => upd((c) => { c.puntuales[mesKey].find((x) => x.id === g.id).nombre = v; })} />
             <div style={{ flex: 1 }} />
@@ -848,12 +871,10 @@ function VistaMes({ d, upd, n, ingresoMes, totFijos, totVar, apartarAnual, fijos
             <Del onClick={() => upd((c) => { c.puntuales[mesKey] = c.puntuales[mesKey].filter((x) => x.id !== g.id); })} />
           </div>
         ))}
-        <AddBtn label="Añadir gasto puntual" onClick={() => upd((c) => { c.puntuales = c.puntuales || {}; c.puntuales[mesKey] = c.puntuales[mesKey] || []; c.puntuales[mesKey].push({ id: uid(), nombre: "", importe: 0 }); })} />
-      </div>
+        {!soloLectura && <AddBtn label="Añadir gasto puntual" onClick={() => upd((c) => { c.puntuales = c.puntuales || {}; c.puntuales[mesKey] = c.puntuales[mesKey] || []; c.puntuales[mesKey].push({ id: uid(), nombre: "", importe: 0 }); })} />}
+      </Seccion>
 
-      {/* Margen para cerrar */}
-      <div style={{ background: cerrado ? `${T.accent}0a` : T.panel, border: `1px solid ${cerrado ? T.accent + "44" : T.border}`, borderRadius: 16, padding: "16px 18px", boxShadow: cerrado ? "none" : T.shadow }}>
-        <div style={{ fontFamily: T.ui, fontSize: 12, fontWeight: 700, color: T.text, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 12, display: "flex", alignItems: "center", gap: 8 }}><Icon n="shield" s={16} c={T.accent} /> Cierre del mes</div>
+      <Seccion icon="shield" titulo="Cierre del mes" extra={(margen >= 0 ? "+" : "") + eur(margen)} abierto={abierto("cie")} onTog={() => togL("cie")}>
         <Fila l="Ingresos base" v={eur(ingresoMes)} c={T.accent} />
         {totalExtraMes > 0 && <Fila l="+ Ingresos adicionales" v={"+" + eur(totalExtraMes)} c={T.accent} />}
         <Fila l="− Gastos del mes" v={"−" + eur(totalGastosMes)} c={T.mid} />
@@ -864,11 +885,21 @@ function VistaMes({ d, upd, n, ingresoMes, totFijos, totVar, apartarAnual, fijos
           <span style={{ fontFamily: T.serif, fontSize: 28, color: margen >= 0 ? T.accent : T.neg }}>{margen >= 0 ? "+" : ""}{eur(margen)}</span>
         </div>
         {anualesPagadosMes > 0 && <div style={{ fontFamily: T.ui, fontSize: 10, color: T.dim, textAlign: "center", marginBottom: 10, lineHeight: 1.4 }}>Además has pagado {eur(anualesPagadosMes)} de anuales este mes: salen de lo apartado, no restan al margen.</div>}
-        <button onClick={cerrarMes} style={{ width: "100%", padding: "12px", borderRadius: 10, border: cerrado ? `1px solid ${T.accent}` : "none", cursor: "pointer", fontFamily: T.ui, fontSize: 13, fontWeight: 700, background: cerrado ? "none" : T.accent, color: cerrado ? T.accent : "#fff", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
-          <Icon n={cerrado ? "lock" : "check"} s={16} c={cerrado ? T.accent : "#fff"} /> {cerrado ? `${MESES[d.mes]} cerrado · reabrir` : `Cerrar ${MESES[d.mes]}`}
-        </button>
-        {cerrado && <div style={{ fontFamily: T.ui, fontSize: 10.5, color: T.dim, textAlign: "center", marginTop: 8 }}>El margen de {eur(margen)} pasa a tu ahorro libre.</div>}
-      </div>
+        {esActivo && !cerrado && (
+          <>
+            <button onClick={cerrarYAvanzar} style={{ width: "100%", padding: "12px", borderRadius: 10, border: "none", cursor: "pointer", fontFamily: T.ui, fontSize: 13, fontWeight: 700, background: T.accent, color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
+              <Icon n="check" s={16} c="#fff" /> Cerrar {MESES[d.mes]} y activar {MESES[sig]}
+            </button>
+            <div style={{ fontFamily: T.ui, fontSize: 10, color: T.dim, textAlign: "center", marginTop: 8, lineHeight: 1.4 }}>Al cerrar se congelan las cuotas y el prorrateo actuales como plan de {MESES[sig]}.</div>
+          </>
+        )}
+        {esActivo && cerrado && (
+          <button onClick={reabrir} style={{ width: "100%", padding: "12px", borderRadius: 10, border: `1px solid ${T.accent}`, cursor: "pointer", fontFamily: T.ui, fontSize: 13, fontWeight: 700, background: "none", color: T.accent, display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
+            <Icon n="lock" s={16} c={T.accent} /> {MESES[d.mes]} cerrado · reabrir
+          </button>
+        )}
+        {soloLectura && <div style={{ fontFamily: T.ui, fontSize: 10.5, color: T.dim, textAlign: "center" }}>{cerrado ? "Mes cerrado." : "Mes en consulta."} Para modificarlo, actívalo arriba.</div>}
+      </Seccion>
     </>
   );
 }
@@ -920,7 +951,7 @@ function Resumen(x) {
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}><span style={{ fontFamily: T.ui, fontSize: 13, fontWeight: 700, color: T.text }}>Disponible</span><span style={{ fontFamily: T.serif, fontSize: 26, color: x.disponible >= 0 ? T.accent : T.neg }}>{eur(x.disponible)}</span></div>
       </Panel>
       <Panel tono={T.accent}>
-        <div style={{ fontFamily: T.ui, fontSize: 10, color: T.dim, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 10 }}>A apartar este mes ({x.mesLabel}) para anuales</div>
+        <div style={{ fontFamily: T.ui, fontSize: 10, color: T.dim, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 10 }}>A apartar para anuales · se congelará al cerrar {x.mesLabel}</div>
         <Fila l="Pendiente del año" v={eur(x.anualPendiente)} pad="4px 0" />
         <Fila l={"− Bolsa" + (x.bolsaLabel ? " (" + x.bolsaLabel + ")" : "")} v={"−" + eur(x.reservaBolsa)} c={T.dim} pad="4px 0" />
         <Fila l="− Parte de la paga extra" v={"−" + eur(x.extraFactor)} c={T.dim} pad="4px 0" />

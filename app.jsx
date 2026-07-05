@@ -64,12 +64,12 @@ const TIPOS_ACTIVO = {
   bono:   { label: "Bono",   color: "#6A4C93", icono: "📜" },
 };
 const TIPOS_UNIDADES = ["etf", "accion", "cripto"]; // se introducen por cantidad × precio; fondo/bono por importe directo
-const APP_VERSION = "v54-econ12";
+const APP_VERSION = "v55-econ13";
 const nuevoMes = () => new Date().getMonth();
-const VACIO = { mes: nuevoMes(), mesActivo: nuevoMes(), plan: null, bancos: [], inversiones: [], ingresos: [], objetivos: [], fijos: [], variables: [], anuales: [], inmuebles: [], deudas: [], presupuestos: [], puntuales: {}, ingresosMes: {}, provisionPagos: {}, cerrados: [],
+const VACIO = { mes: nuevoMes(), mesActivo: nuevoMes(), plan: null, onboarded: false, bancos: [], inversiones: [], ingresos: [], objetivos: [], fijos: [], variables: [], anuales: [], inmuebles: [], deudas: [], presupuestos: [], puntuales: {}, ingresosMes: {}, provisionPagos: {}, cerrados: [],
   criterios: { mesesEmergencia: 6, fondoBanco: null, proMesLimite: 10, proRedondeo: 50, proBolsa: null, proExtraPct: 0, bancoNomina: null, autoAnual: false, autoAnualBanco: null, presImprevistos: 10, presRedondeo: 50 } };
 
-const EJEMPLO = { mes: nuevoMes(), mesActivo: nuevoMes(), plan: null, cerrados: [],
+const EJEMPLO = { mes: nuevoMes(), mesActivo: nuevoMes(), plan: null, onboarded: true, cerrados: [],
   inmuebles: [{ id: "in1", nombre: "Vivienda", valor: 145000 }],
   deudas: [{ id: "de1", nombre: "Hipoteca pendiente", importe: 82000 }],
   presupuestos: [{ id: "pr1", nombre: "Terraza", articulos: [{ id: "ar1", nombre: "Sofá exterior", uds: 1, precio: 650 }, { id: "ar2", nombre: "Mesa", uds: 1, precio: 180 }], imprevistos: 10, incorporado: false }],
@@ -187,7 +187,6 @@ function App() {
   const [d, setD] = useState(cargarDatos);
   const [tab, setTab] = useState("datos");
   const [abiertos, setAbiertos] = useState({});
-  const [tutorial, setTutorial] = useState(() => { try { return !localStorage.getItem(STORAGE_KEY); } catch (e) { return true; } });
   const [ajustes, setAjustes] = useState(false);
   const [guia, setGuia] = useState(false);
   useEffect(() => { guardarDatos(d); }, [d]);
@@ -197,6 +196,7 @@ function App() {
   const n = numf;
   const factor = (b) => (b.compartida ? 0.5 : 1);
   const vacio = d.bancos.length === 0 && d.ingresos.length === 0;
+  const mostrarTutorial = vacio && !d.onboarded;
 
   const saldoTotal = d.bancos.reduce((a, b) => a + n(b.saldo) * factor(b), 0);
   const nominaRef = d.ingresos.find((g) => g.nomina)?.importe || d.ingresos[0]?.importe || 0;
@@ -260,8 +260,8 @@ function App() {
   const bancoOptsN = [{ v: "", l: "—" }, ...bancoOpts];
   const nombreBanco = (id) => d.bancos.find((b) => b.id === id)?.nombre || "—";
 
-  const cargarEjemplo = () => { setD(JSON.parse(JSON.stringify(EJEMPLO))); setTutorial(false); };
-  const empezarCero = () => { setTutorial(false); tog("bancos"); };
+  const cargarEjemplo = () => { const e = JSON.parse(JSON.stringify(EJEMPLO)); e.onboarded = true; setD(e); };
+  const empezarCero = () => { upd((c) => { c.onboarded = true; }); setAbiertos((s) => ({ ...s, bancos: true })); };
   const exportar = () => {
     try { const blob = new Blob([JSON.stringify(d, null, 2)], { type: "application/json" });
       const url = URL.createObjectURL(blob); const a = document.createElement("a");
@@ -272,10 +272,10 @@ function App() {
   const importar = (e) => {
     const file = e.target.files && e.target.files[0]; if (!file) return;
     const r = new FileReader();
-    r.onload = () => { try { const obj = JSON.parse(r.result); setD({ ...VACIO, ...obj }); setAjustes(false); setTutorial(false); } catch (err) { alert("El archivo no es una copia válida."); } };
+    r.onload = () => { try { const obj = JSON.parse(r.result); setD({ ...VACIO, ...obj, onboarded: true }); setAjustes(false); } catch (err) { alert("El archivo no es una copia válida."); } };
     r.readAsText(file);
   };
-  const borrarTodo = () => { if (confirm("¿Borrar todos tus datos y empezar de cero? Exporta antes una copia si quieres conservarlos.")) { setD(VACIO); setAjustes(false); setTutorial(true); } };
+  const borrarTodo = () => { if (confirm("¿Borrar todos tus datos y empezar de cero? Exporta antes una copia si quieres conservarlos.")) { setD(JSON.parse(JSON.stringify(VACIO))); setAjustes(false); } };
 
   return (
     <div style={{ background: T.bg, minHeight: "100vh", maxWidth: 480, margin: "0 auto", color: T.text, fontFamily: T.ui }}>
@@ -369,7 +369,7 @@ function App() {
 
       <div style={{ padding: "0 16px 40px" }}>
         {/* TUTORIAL / BIENVENIDA */}
-        {tutorial && vacio && (
+        {mostrarTutorial && (
           <div style={{ background: `${T.accent}0a`, border: `1px solid ${T.accent}33`, borderRadius: 16, padding: "18px", marginBottom: 14 }}>
             <div style={{ fontFamily: T.serif, fontSize: 22, color: T.text, marginBottom: 6 }}>Bienvenido a economízalo.</div>
             <div style={{ fontFamily: T.ui, fontSize: 12.5, color: T.mid, lineHeight: 1.6, marginBottom: 14 }}>
@@ -391,7 +391,7 @@ function App() {
 
         {tab === "datos" && (
           <>
-            {!tutorial && !vacio && <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 8 }}><button onClick={cargarEjemplo} style={{ background: "none", border: "none", color: T.dim, fontFamily: T.ui, fontSize: 10.5, cursor: "pointer", textDecoration: "underline" }}>recargar ejemplo</button></div>}
+            {!mostrarTutorial && !vacio && <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 8 }}><button onClick={cargarEjemplo} style={{ background: "none", border: "none", color: T.dim, fontFamily: T.ui, fontSize: 10.5, cursor: "pointer", textDecoration: "underline" }}>recargar ejemplo</button></div>}
             {!vacio && pendientes.length > 0 && (
               <div style={{ background: `${T.warn}0c`, border: `1px solid ${T.warn}40`, borderRadius: 12, padding: "11px 13px", marginBottom: 12 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 6 }}><Icon n="info" s={14} c={T.warn} /><span style={{ fontFamily: T.ui, fontSize: 11.5, fontWeight: 700, color: T.warn }}>Para que todo cuadre</span></div>

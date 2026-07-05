@@ -64,10 +64,10 @@ const TIPOS_ACTIVO = {
   bono:   { label: "Bono",   color: "#6A4C93", icono: "📜" },
 };
 const TIPOS_UNIDADES = ["etf", "accion", "cripto"]; // se introducen por cantidad × precio; fondo/bono por importe directo
-const APP_VERSION = "v53-econ11";
+const APP_VERSION = "v54-econ12";
 const nuevoMes = () => new Date().getMonth();
 const VACIO = { mes: nuevoMes(), mesActivo: nuevoMes(), plan: null, bancos: [], inversiones: [], ingresos: [], objetivos: [], fijos: [], variables: [], anuales: [], inmuebles: [], deudas: [], presupuestos: [], puntuales: {}, ingresosMes: {}, provisionPagos: {}, cerrados: [],
-  criterios: { mesesEmergencia: 6, fondoBanco: null, proMesLimite: 10, proRedondeo: 50, proBolsa: null, proExtraPct: 42.86, bancoNomina: null, autoAnual: false, autoAnualBanco: null, presImprevistos: 10, presRedondeo: 50 } };
+  criterios: { mesesEmergencia: 6, fondoBanco: null, proMesLimite: 10, proRedondeo: 50, proBolsa: null, proExtraPct: 0, bancoNomina: null, autoAnual: false, autoAnualBanco: null, presImprevistos: 10, presRedondeo: 50 } };
 
 const EJEMPLO = { mes: nuevoMes(), mesActivo: nuevoMes(), plan: null, cerrados: [],
   inmuebles: [{ id: "in1", nombre: "Vivienda", valor: 145000 }],
@@ -118,7 +118,7 @@ function Toggle({ on, onClick }) {
     </button>
   );
 }
-function Bloque({ icon, titulo, sub, total, sufTotal, children, abierto, onTog, vacio }) {
+function Bloque({ icon, titulo, sub, total, sufTotal, children, abierto, onTog, vacio, onCrit }) {
   return (
     <div style={{ background: T.panel, border: `1px solid ${T.border}`, borderRadius: 16, marginBottom: 12, overflow: "hidden", boxShadow: T.shadow }}>
       <div onClick={onTog} style={{ display: "flex", alignItems: "center", gap: 11, padding: "15px 16px", cursor: "pointer" }}>
@@ -129,6 +129,7 @@ function Bloque({ icon, titulo, sub, total, sufTotal, children, abierto, onTog, 
         </div>
         {vacio && !abierto && <span style={{ fontFamily: T.ui, fontSize: 10, color: T.accent, fontWeight: 600, marginRight: 8 }}>+ añadir</span>}
         {total != null && !vacio && <div style={{ fontFamily: T.mono, fontSize: 14, fontWeight: 700, color: T.mid, marginRight: 8 }}>{eur(total)}{sufTotal || ""}</div>}
+        {onCrit && <button onClick={(e) => { e.stopPropagation(); onCrit(); }} style={{ background: "none", border: "none", padding: 4, cursor: "pointer", display: "flex" }}><Icon n="cog" s={15} c={T.dim} /></button>}
         <div style={{ transform: abierto ? "rotate(180deg)" : "none", transition: "transform 0.2s" }}><Icon n="chevron" s={16} c={T.dim} /></div>
       </div>
       {abierto && <div style={{ padding: "0 16px 16px" }}>{children}</div>}
@@ -188,9 +189,11 @@ function App() {
   const [abiertos, setAbiertos] = useState({});
   const [tutorial, setTutorial] = useState(() => { try { return !localStorage.getItem(STORAGE_KEY); } catch (e) { return true; } });
   const [ajustes, setAjustes] = useState(false);
+  const [guia, setGuia] = useState(false);
   useEffect(() => { guardarDatos(d); }, [d]);
   const upd = (fn) => setD((prev) => { const c = JSON.parse(JSON.stringify(prev)); fn(c); return c; });
   const tog = (k) => setAbiertos((s) => ({ ...s, [k]: !s[k] }));
+  const irACriterio = (k, id) => { setAbiertos((s) => ({ ...s, crit: true, [k]: true })); setTimeout(() => { const el = document.getElementById(id); if (el && el.scrollIntoView) el.scrollIntoView({ behavior: "smooth", block: "center" }); }, 80); };
   const n = numf;
   const factor = (b) => (b.compartida ? 0.5 : 1);
   const vacio = d.bancos.length === 0 && d.ingresos.length === 0;
@@ -243,6 +246,10 @@ function App() {
   const cuotaObjAutoTotal = objsAuto.reduce((a, o) => a + cuotaObjRed(o), 0);
   const totalPresup = (p) => { const base = (p.articulos || []).reduce((a, ar) => a + n(ar.uds) * n(ar.precio), 0); return base * (1 + n(p.imprevistos) / 100); };
 
+  const pendientes = [];
+  if (d.ingresos.length > 0 && !d.ingresos.some((g) => g.nomina)) pendientes.push("Marca con N tu nómina de referencia en Ingresos.");
+  if (d.bancos.length > 0 && (d.fijos.length + d.variables.length) > 0 && !bancoExiste(d.criterios.bancoNomina)) pendientes.push("Elige en Criterios → Nómina en qué banco cobras.");
+  if ([...d.fijos, ...d.variables].some((g) => !bancoExiste(g.banco))) pendientes.push("Asigna banco de pago a todos los gastos (para el reparto).");
   const gastoCorriente = totFijos + totVar; // totFijos ya incluye el ahorro automatizado (objetivos + provisión anuales)
   const ahorroLibre = ingresoMes - gastoCorriente;
   const inmueblesTotal = (d.inmuebles || []).reduce((a, i) => a + n(i.valor), 0);
@@ -309,6 +316,9 @@ function App() {
               <input type="file" accept="application/json,.json" onChange={importar} style={{ display: "none" }} />
             </label>
             <div style={{ fontFamily: T.ui, fontSize: 10.5, fontWeight: 700, color: T.dim, textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 8 }}>App</div>
+            <button onClick={() => { setAjustes(false); setGuia(true); }} style={{ width: "100%", display: "flex", alignItems: "center", gap: 12, background: T.surface, border: `1px solid ${T.border}`, borderRadius: 12, padding: "13px 14px", cursor: "pointer", marginBottom: 8 }}>
+              <Icon n="info" s={19} c={T.accent} /><div style={{ textAlign: "left" }}><div style={{ fontFamily: T.ui, fontSize: 13, fontWeight: 600, color: T.text }}>Cómo funciona</div><div style={{ fontFamily: T.ui, fontSize: 10.5, color: T.dim }}>El modelo de la app en dos minutos</div></div>
+            </button>
             <button onClick={() => location.reload()} style={{ width: "100%", display: "flex", alignItems: "center", gap: 12, background: T.surface, border: `1px solid ${T.border}`, borderRadius: 12, padding: "13px 14px", cursor: "pointer", marginBottom: 8 }}>
               <Icon n="reparto" s={19} c={T.accent} /><div style={{ textAlign: "left" }}><div style={{ fontFamily: T.ui, fontSize: 13, fontWeight: 600, color: T.text }}>Buscar actualización</div><div style={{ fontFamily: T.ui, fontSize: 10.5, color: T.dim }}>Recarga la app a la última versión</div></div>
             </button>
@@ -316,6 +326,35 @@ function App() {
               <Icon n="x" s={19} c={T.neg} /><div style={{ textAlign: "left" }}><div style={{ fontFamily: T.ui, fontSize: 13, fontWeight: 600, color: T.neg }}>Borrar y empezar de cero</div><div style={{ fontFamily: T.ui, fontSize: 10.5, color: T.dim }}>Elimina todos los datos de este dispositivo</div></div>
             </button>
             <div style={{ fontFamily: T.mono, fontSize: 9.5, color: T.dim, textAlign: "center", marginTop: 16 }}>economízalo · {APP_VERSION}</div>
+          </div>
+        </div>
+      )}
+
+      {guia && (
+        <div onClick={() => setGuia(false)} style={{ position: "fixed", inset: 0, background: "rgba(20,30,15,0.35)", zIndex: 50, display: "flex", alignItems: "flex-end", justifyContent: "center" }}>
+          <div onClick={(e) => e.stopPropagation()} style={{ background: T.panel, width: "100%", maxWidth: 480, borderRadius: "20px 20px 0 0", padding: "20px 18px 30px", boxShadow: "0 -4px 20px rgba(0,0,0,0.12)", maxHeight: "88vh", overflowY: "auto" }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
+              <span style={{ fontFamily: T.serif, fontSize: 20, color: T.text }}>Cómo funciona</span>
+              <button onClick={() => setGuia(false)} style={{ background: T.surface2, border: "none", borderRadius: 8, width: 32, height: 32, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}><Icon n="x" s={15} c={T.mid} /></button>
+            </div>
+
+            <div style={{ fontFamily: T.ui, fontSize: 12, color: T.mid, lineHeight: 1.6, marginBottom: 14 }}>economízalo separa tu dinero en tres vistas: en <b style={{ color: T.accent }}>Datos</b> defines tu situación una sola vez, en <b style={{ color: T.accent }}>Mes</b> haces el seguimiento del mes en curso y en <b style={{ color: T.accent }}>Resumen</b> lo lees todo calculado.</div>
+
+            <div style={{ fontFamily: T.ui, fontSize: 11, fontWeight: 700, color: T.text, textTransform: "uppercase", letterSpacing: "0.05em", margin: "0 0 8px" }}>El ciclo de cada mes</div>
+            {[["1", "Al cobrar, la pestaña Mes te dice cuánto transferir a cada banco (según el plan congelado al cerrar el mes anterior)."], ["2", "Durante el mes marcas lo que pagas: gastos, cuotas de objetivos (suman a su bolsa) y la provisión de anuales."], ["3", "Anota los gastos puntuales e ingresos extra que solo son de este mes."], ["4", "Al cerrar el mes, las cifras del momento se congelan como plan del mes siguiente y este pasa a ser el activo."]].map(([nq, txt]) => (
+              <div key={nq} style={{ display: "flex", alignItems: "flex-start", gap: 10, marginBottom: 8 }}>
+                <div style={{ width: 20, height: 20, borderRadius: "50%", background: `${T.accent}18`, color: T.accent, fontFamily: T.mono, fontSize: 10, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, marginTop: 1 }}>{nq}</div>
+                <span style={{ fontFamily: T.ui, fontSize: 11.5, color: T.mid, lineHeight: 1.5 }}>{txt}</span>
+              </div>
+            ))}
+
+            <div style={{ fontFamily: T.ui, fontSize: 11, fontWeight: 700, color: T.text, textTransform: "uppercase", letterSpacing: "0.05em", margin: "14px 0 8px" }}>Glosario</div>
+            {[["Bolsa", "dinero apartado dentro de un banco para un fin (no cuenta como disponible)."], ["Prescindibles", "gastos recurrentes que podrías recortar en un apuro (compra, ocio…)."], ["Prorrateo", "lo que apartas cada mes para cubrir los gastos anuales pendientes."], ["Provisión", "el gasto fijo mensual que crea ese prorrateo si lo automatizas."], ["Fondo de emergencia", "colchón de N meses de gastos fijos; se resta del dinero disponible."], ["Mes activo", "el único mes en que la pestaña Mes modifica los datos; el resto es consulta."], ["Plan congelado", "las cifras (cuotas y provisión) fijadas al cerrar un mes: son las que asumes el mes siguiente."], ["auto", "etiqueta de las fichas generadas por una automatización; se controlan desde su origen."]].map(([t, def]) => (
+              <div key={t} style={{ fontFamily: T.ui, fontSize: 11.5, color: T.mid, lineHeight: 1.55, marginBottom: 5 }}><b style={{ color: T.text }}>{t}</b>: {def}</div>
+            ))}
+
+            <div style={{ fontFamily: T.ui, fontSize: 11, fontWeight: 700, color: T.text, textTransform: "uppercase", letterSpacing: "0.05em", margin: "14px 0 8px" }}>Tus datos</div>
+            <div style={{ fontFamily: T.ui, fontSize: 11.5, color: T.mid, lineHeight: 1.6 }}>Todo se guarda <b style={{ color: T.text }}>solo en este dispositivo</b>: nada viaja a ningún servidor. Compartir la app (la dirección web) nunca comparte tus finanzas. A cambio, la copia de seguridad es cosa tuya: expórtala de vez en cuando desde Ajustes.</div>
           </div>
         </div>
       )}
@@ -342,6 +381,7 @@ function App() {
                 <span style={{ fontFamily: T.ui, fontSize: 12, color: T.mid }}>{txt}</span>
               </div>
             ))}
+            <div style={{ fontFamily: T.ui, fontSize: 10.5, color: T.dim, marginTop: 4 }}>Cuando quieras el detalle completo: Ajustes ⚙ → Cómo funciona.</div>
             <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
               <button onClick={empezarCero} style={{ flex: 1, background: T.accent, color: "#fff", border: "none", borderRadius: 10, padding: "11px", fontFamily: T.ui, fontSize: 12.5, fontWeight: 700, cursor: "pointer" }}>Empezar de cero</button>
               <button onClick={cargarEjemplo} style={{ flex: 1, background: "none", color: T.accent, border: `1px solid ${T.accent}55`, borderRadius: 10, padding: "11px", fontFamily: T.ui, fontSize: 12.5, fontWeight: 700, cursor: "pointer" }}>Ver un ejemplo</button>
@@ -352,8 +392,14 @@ function App() {
         {tab === "datos" && (
           <>
             {!tutorial && !vacio && <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 8 }}><button onClick={cargarEjemplo} style={{ background: "none", border: "none", color: T.dim, fontFamily: T.ui, fontSize: 10.5, cursor: "pointer", textDecoration: "underline" }}>recargar ejemplo</button></div>}
+            {!vacio && pendientes.length > 0 && (
+              <div style={{ background: `${T.warn}0c`, border: `1px solid ${T.warn}40`, borderRadius: 12, padding: "11px 13px", marginBottom: 12 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 6 }}><Icon n="info" s={14} c={T.warn} /><span style={{ fontFamily: T.ui, fontSize: 11.5, fontWeight: 700, color: T.warn }}>Para que todo cuadre</span></div>
+                {pendientes.map((p, i) => <div key={i} style={{ fontFamily: T.ui, fontSize: 11, color: T.mid, lineHeight: 1.5, paddingLeft: 21 }}>{p}</div>)}
+              </div>
+            )}
 
-            <Bloque icon="banco" titulo="Bancos y saldos" sub="Saldo real, compartidas y bolsas" total={saldoTotal} abierto={!!abiertos.bancos} onTog={() => tog("bancos")} vacio={d.bancos.length === 0}>
+            <Bloque icon="banco" titulo="Bancos y saldos" sub="Saldo real, compartidas y bolsas" total={saldoTotal} abierto={!!abiertos.bancos} onTog={() => tog("bancos")} onCrit={() => irACriterio("critFon", "crit-fon")} vacio={d.bancos.length === 0}>
               {d.bancos.length === 0 && <Vacio txt="Añade el primer banco con el saldo que tienes ahora mismo. Dentro puedes crear bolsas de reserva (dinero apartado)." />}
               {d.bancos.map((b) => {
                 const resB = b.reservas.reduce((a, r) => a + n(r.importe), 0) + bolsasAuto.filter((x) => x.banco === b.id).reduce((a, x) => a + n(x.importe), 0);
@@ -451,7 +497,7 @@ function App() {
               <AddBtn label="Añadir inversión" onClick={() => upd((c) => c.inversiones.push({ id: uid(), nombre: "", tipo: "etf", ticker: "", cantidad: 0, precioMedio: 0, precioActual: 0, invertido: 0, valor: 0, soloPos: false }))} />
             </Bloque>
 
-            <Bloque icon="ingreso" titulo="Ingresos base" sub="Nóminas y otros ingresos estables" total={ingresoMes} abierto={!!abiertos.ing} onTog={() => tog("ing")} vacio={d.ingresos.length === 0}>
+            <Bloque icon="ingreso" titulo="Ingresos base" sub="Nóminas y otros ingresos estables" total={ingresoMes} abierto={!!abiertos.ing} onTog={() => tog("ing")} onCrit={() => irACriterio("critNom", "crit-nom")} vacio={d.ingresos.length === 0}>
               {d.ingresos.length === 0 && <Vacio txt="Añade tus ingresos mensuales. Marca con N la nómina de referencia (para el margen de seguridad)." />}
               {d.ingresos.map((g) => (
                 <div key={g.id} style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8 }}>
@@ -535,7 +581,7 @@ function App() {
               <SubLista d={d} upd={upd} campo="variables" label="Prescindibles" total={totVar} bancoOpts={bancoOptsN} />
             </Bloque>
 
-            <Bloque icon="anual" titulo="Gastos anuales" sub={d.anuales.length ? `Pendiente ${eur(anualPendiente)}` : "Por bloques, con seguimiento de pago"} total={anualTotal} sufTotal="/año" abierto={!!abiertos.ga} onTog={() => tog("ga")} vacio={d.anuales.length === 0}>
+            <Bloque icon="anual" titulo="Gastos anuales" sub={d.anuales.length ? `Pendiente ${eur(anualPendiente)}` : "Por bloques, con seguimiento de pago"} total={anualTotal} sufTotal="/año" abierto={!!abiertos.ga} onTog={() => tog("ga")} onCrit={() => irACriterio("critAnu", "crit-anu")} vacio={d.anuales.length === 0}>
               {d.anuales.length === 0 && <Vacio txt="Agrupa los gastos anuales por bloques (Coche, Hogar…). Cada mes marcarás lo que vayas pagando." />}
               {d.anuales.map((cat) => {
                 const tot = cat.conceptos.reduce((a, x) => a + n(x.importe), 0); const pag = cat.conceptos.reduce((a, x) => a + pagadoConcepto(x), 0);
@@ -603,7 +649,7 @@ function App() {
               <button onClick={() => upd((c) => { c.deudas = c.deudas || []; c.deudas.push({ id: uid(), nombre: "", importe: 0 }); })} style={{ background: "none", border: "none", color: T.accent, fontFamily: T.ui, fontSize: 11, fontWeight: 600, cursor: "pointer", padding: "4px 0" }}>+ deuda</button>
             </Bloque>
 
-            <Bloque icon="carro" titulo="Presupuestos" sub={(d.presupuestos || []).length ? "Previsión de compras · incorpora a anuales" : "Prevé compras y pásalas a anuales"} abierto={!!abiertos.pre} onTog={() => tog("pre")} vacio={!(d.presupuestos || []).length}>
+            <Bloque icon="carro" titulo="Presupuestos" sub={(d.presupuestos || []).length ? "Previsión de compras · incorpora a anuales" : "Prevé compras y pásalas a anuales"} abierto={!!abiertos.pre} onTog={() => tog("pre")} onCrit={() => irACriterio("critPre", "crit-pre")} vacio={!(d.presupuestos || []).length}>
               {!(d.presupuestos || []).length && <Vacio txt="Crea un presupuesto (una compra prevista) con sus artículos. Al incorporarlo se crea un gasto anual redondeado." />}
               {(d.presupuestos || []).map((p) => {
                 const tot = totalPresup(p); const incorp = red(tot, n(d.criterios.presRedondeo));
@@ -644,29 +690,30 @@ function App() {
               <AddBtn label="Añadir presupuesto" onClick={() => upd((c) => { c.presupuestos = c.presupuestos || []; c.presupuestos.push({ id: uid(), nombre: "", articulos: [{ id: uid(), nombre: "", uds: 1, precio: 0 }], imprevistos: n(d.criterios.presImprevistos), incorporado: false }); })} />
             </Bloque>
 
-            <Bloque icon="criterios" titulo="Criterios" sub="Las reglas de cálculo" abierto={!!abiertos.crit} onTog={() => tog("crit")}>
-              <CritFila titulo="Nómina entra en" desc="Banco donde cobras (para el reparto)"><Sel value={d.criterios.bancoNomina} onChange={(v) => upd((c) => { c.criterios.bancoNomina = v || null; })} opciones={bancoOptsN} /></CritFila>
-              <CritFila titulo="Fondo de emergencia" desc="Meses de gastos fijos que reservas"><Campo value={d.criterios.mesesEmergencia} sufijo="meses" ancho={110} onChange={(v) => upd((c) => { c.criterios.mesesEmergencia = numf(v); })} /></CritFila>
-              <div style={{ fontFamily: T.mono, fontSize: 10.5, color: T.dim, margin: "2px 0 8px" }}>{d.criterios.mesesEmergencia} × {eur(totFijos)} fijos = <span style={{ color: T.warn }}>{eur(fondoEmergencia)}</span></div>
-              <CritFila titulo="Bolsa automática en" desc="Crea la bolsa del fondo en ese banco"><Sel value={bancoExiste(d.criterios.fondoBanco) ? d.criterios.fondoBanco : ""} onChange={(v) => upd((c) => { c.criterios.fondoBanco = v || null; })} opciones={bancoOptsN} /></CritFila>
-              <div style={{ height: 8 }} />
-
-              <Titulo icon="reparto" t="Prorrateo de anuales" />
-              <CritFila titulo="Aportar hasta" desc="Último mes en que apartas"><Sel value={d.criterios.proMesLimite} onChange={(v) => upd((c) => { c.criterios.proMesLimite = parseInt(v); })} opciones={MESES.map((m, i) => ({ v: i, l: m }))} /></CritFila>
-              <CritFila titulo="Redondeo" desc="Redondea la aportación"><Campo value={d.criterios.proRedondeo} sufijo="€" ancho={90} onChange={(v) => upd((c) => { c.criterios.proRedondeo = numf(v); })} /></CritFila>
-              <CritFila titulo="Bolsa de reserva" desc="Su saldo ya apartado se descuenta"><Sel value={d.criterios.proBolsa || ""} onChange={(v) => upd((c) => { c.criterios.proBolsa = v || null; })} ancho={190} opciones={[{ v: "", l: "Ninguna" }, ...todasBolsas.map((x) => ({ v: x.id, l: `${x.label} (${eur(x.importe)})` }))]} /></CritFila>
-              <CritFila titulo="% de la paga extra" desc="Parte del extra que ya irá a anuales"><Campo value={d.criterios.proExtraPct} sufijo="%" ancho={80} onChange={(v) => upd((c) => { c.criterios.proExtraPct = numf(v); })} /></CritFila>
-              <div style={{ fontFamily: T.mono, fontSize: 10, color: T.dim, margin: "2px 0 16px", lineHeight: 1.5 }}>({eur(anualPendiente)} − {eur(reservaBolsa)} bolsa{n(d.criterios.proExtraPct) > 0 ? ` − ${eur(extraFactor)} extra` : ""}) ÷ {mesesRest} → <span style={{ color: T.accent }}>{eur(apartarAnual)}/mes</span></div>
-
-              <Titulo icon="auto" t="Ahorro automático" />
-              <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "7px 0" }}><div style={{ flex: 1 }}><div style={{ fontFamily: T.ui, fontSize: 13, color: T.text, fontWeight: 600 }}>Apartar anuales solo</div><div style={{ fontFamily: T.ui, fontSize: 10.5, color: T.dim }}>Crea un gasto fijo mensual con la provisión</div></div><Toggle on={d.criterios.autoAnual} onClick={() => upd((c) => { c.criterios.autoAnual = !c.criterios.autoAnual; })} /></div>
-              {d.criterios.autoAnual && <CritFila titulo="→ a qué banco" desc={`${eur(apartarAnual)}/mes`}><Sel value={bancoAnualOk ? d.criterios.autoAnualBanco : ""} onChange={(v) => upd((c) => { c.criterios.autoAnualBanco = v || null; })} opciones={bancoOptsN} /></CritFila>}
-              {d.criterios.autoAnual && !bancoAnualOk && <div style={{ fontFamily: T.ui, fontSize: 10.5, color: T.warn, padding: "2px 0 6px" }}>Elige a qué banco va la provisión para que se cree el gasto fijo.</div>}
-              <div style={{ fontFamily: T.ui, fontSize: 10.5, color: T.dim, padding: "4px 0 2px", lineHeight: 1.5 }}>Los objetivos se automatizan uno a uno desde su ficha (crean su bolsa y su gasto fijo).</div>
-              <div style={{ height: 10 }} />
-              <Titulo icon="carro" t="Presupuestos" />
-              <CritFila titulo="Imprevistos por defecto" desc="Margen de un presupuesto nuevo"><Campo value={d.criterios.presImprevistos} sufijo="%" ancho={80} onChange={(v) => upd((c) => { c.criterios.presImprevistos = numf(v); })} /></CritFila>
-              <CritFila titulo="Redondeo al incorporar" desc="Al pasar a anuales"><Campo value={d.criterios.presRedondeo} sufijo="€" ancho={90} onChange={(v) => upd((c) => { c.criterios.presRedondeo = numf(v); })} /></CritFila>
+            <Bloque icon="criterios" titulo="Criterios" sub="Las reglas de cálculo, por áreas" abierto={!!abiertos.crit} onTog={() => tog("crit")}>
+              <CritCard id="crit-nom" icon="ingreso" titulo="Nómina y reparto" afecta="Mes" desc="En qué banco cobras: de ahí salen las transferencias del mes" abierto={!!abiertos.critNom} onTog={() => tog("critNom")}>
+                <CritFila titulo="Nómina entra en" desc="Banco donde cobras"><Sel value={d.criterios.bancoNomina} onChange={(v) => upd((c) => { c.criterios.bancoNomina = v || null; })} opciones={bancoOptsN} /></CritFila>
+              </CritCard>
+              <CritCard id="crit-fon" icon="shield" titulo="Fondo de emergencia" afecta="Resumen · Bancos" desc="Colchón en meses de gastos fijos que no cuenta como disponible" abierto={!!abiertos.critFon} onTog={() => tog("critFon")}>
+                <CritFila titulo="Meses de gastos fijos" desc="Cuántos meses reservas"><Campo value={d.criterios.mesesEmergencia} sufijo="meses" ancho={110} onChange={(v) => upd((c) => { c.criterios.mesesEmergencia = numf(v); })} /></CritFila>
+                <div style={{ fontFamily: T.mono, fontSize: 10.5, color: T.dim, margin: "2px 0 8px" }}>{d.criterios.mesesEmergencia} × {eur(totFijos)} fijos = <span style={{ color: T.warn }}>{eur(fondoEmergencia)}</span></div>
+                <CritFila titulo="Bolsa automática en" desc="Crea la bolsa del fondo en ese banco"><Sel value={bancoExiste(d.criterios.fondoBanco) ? d.criterios.fondoBanco : ""} onChange={(v) => upd((c) => { c.criterios.fondoBanco = v || null; })} opciones={bancoOptsN} /></CritFila>
+              </CritCard>
+              <CritCard id="crit-anu" icon="anual" titulo="Gastos anuales · prorrateo" afecta="Mes · Gastos" desc="Cuánto apartar cada mes para cubrir los anuales pendientes" abierto={!!abiertos.critAnu} onTog={() => tog("critAnu")}>
+                <CritFila titulo="Aportar hasta" desc="Último mes en que apartas"><Sel value={d.criterios.proMesLimite} onChange={(v) => upd((c) => { c.criterios.proMesLimite = parseInt(v); })} opciones={MESES.map((m, i) => ({ v: i, l: m }))} /></CritFila>
+                <CritFila titulo="Redondeo" desc="Redondea la aportación"><Campo value={d.criterios.proRedondeo} sufijo="€" ancho={90} onChange={(v) => upd((c) => { c.criterios.proRedondeo = numf(v); })} /></CritFila>
+                <CritFila titulo="Bolsa de reserva" desc="Su saldo ya apartado se descuenta"><Sel value={d.criterios.proBolsa || ""} onChange={(v) => upd((c) => { c.criterios.proBolsa = v || null; })} ancho={190} opciones={[{ v: "", l: "Ninguna" }, ...todasBolsas.map((x) => ({ v: x.id, l: `${x.label} (${eur(x.importe)})` }))]} /></CritFila>
+                <CritFila titulo="% de la paga extra" desc="Parte del extra que ya irá a anuales"><Campo value={d.criterios.proExtraPct} sufijo="%" ancho={80} onChange={(v) => upd((c) => { c.criterios.proExtraPct = numf(v); })} /></CritFila>
+                <div style={{ fontFamily: T.mono, fontSize: 10, color: T.dim, margin: "2px 0 12px", lineHeight: 1.5 }}>({eur(anualPendiente)} − {eur(reservaBolsa)} bolsa{n(d.criterios.proExtraPct) > 0 ? ` − ${eur(extraFactor)} extra` : ""}) ÷ {mesesRest} → <span style={{ color: T.accent }}>{eur(apartarAnual)}/mes</span></div>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "7px 0" }}><div style={{ flex: 1 }}><div style={{ fontFamily: T.ui, fontSize: 13, color: T.text, fontWeight: 600 }}>Apartar anuales solo</div><div style={{ fontFamily: T.ui, fontSize: 10.5, color: T.dim }}>Crea un gasto fijo mensual con la provisión</div></div><Toggle on={d.criterios.autoAnual} onClick={() => upd((c) => { c.criterios.autoAnual = !c.criterios.autoAnual; })} /></div>
+                {d.criterios.autoAnual && <CritFila titulo="→ a qué banco" desc={`${eur(apartarAnual)}/mes`}><Sel value={bancoAnualOk ? d.criterios.autoAnualBanco : ""} onChange={(v) => upd((c) => { c.criterios.autoAnualBanco = v || null; })} opciones={bancoOptsN} /></CritFila>}
+                {d.criterios.autoAnual && !bancoAnualOk && <div style={{ fontFamily: T.ui, fontSize: 10.5, color: T.warn, padding: "2px 0 6px" }}>Elige a qué banco va la provisión para que se cree el gasto fijo.</div>}
+                <div style={{ fontFamily: T.ui, fontSize: 10.5, color: T.dim, padding: "4px 0 2px", lineHeight: 1.5 }}>Los objetivos se automatizan uno a uno desde su ficha (crean su bolsa y su gasto fijo).</div>
+              </CritCard>
+              <CritCard id="crit-pre" icon="carro" titulo="Presupuestos" afecta="Presupuestos" desc="Valores por defecto al crear e incorporar presupuestos" abierto={!!abiertos.critPre} onTog={() => tog("critPre")}>
+                <CritFila titulo="Imprevistos por defecto" desc="Margen de un presupuesto nuevo"><Campo value={d.criterios.presImprevistos} sufijo="%" ancho={80} onChange={(v) => upd((c) => { c.criterios.presImprevistos = numf(v); })} /></CritFila>
+                <CritFila titulo="Redondeo al incorporar" desc="Al pasar a anuales"><Campo value={d.criterios.presRedondeo} sufijo="€" ancho={90} onChange={(v) => upd((c) => { c.criterios.presRedondeo = numf(v); })} /></CritFila>
+              </CritCard>
             </Bloque>
           </>
         )}
@@ -905,6 +952,24 @@ function VistaMes({ d, upd, n, ingresoMes, apartarAnual, fijosEfectivos, nombreB
 }
 
 function Titulo({ icon, t }) { return <div style={{ fontFamily: T.ui, fontSize: 11, fontWeight: 700, color: T.mid, textTransform: "uppercase", letterSpacing: "0.05em", margin: "6px 0 8px", display: "flex", alignItems: "center", gap: 6 }}><Icon n={icon} s={14} c={T.accent} /> {t}</div>; }
+function CritCard({ id, icon, titulo, desc, afecta, abierto, onTog, children }) {
+  return (
+    <div id={id} style={{ background: T.surface, border: `1px solid ${T.line}`, borderRadius: 12, marginBottom: 10, overflow: "hidden" }}>
+      <div onClick={onTog} style={{ display: "flex", alignItems: "flex-start", gap: 9, padding: "11px 12px", cursor: "pointer" }}>
+        <Icon n={icon} s={16} c={T.accent} />
+        <div style={{ flex: 1 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+            <span style={{ fontFamily: T.ui, fontSize: 12.5, fontWeight: 700, color: T.text }}>{titulo}</span>
+            {afecta && <span style={{ fontFamily: T.mono, fontSize: 8.5, fontWeight: 600, color: T.accentSoft, background: `${T.accentSoft}14`, border: `1px solid ${T.accentSoft}33`, borderRadius: 5, padding: "1px 6px", textTransform: "uppercase", letterSpacing: "0.04em" }}>afecta a {afecta}</span>}
+          </div>
+          <div style={{ fontFamily: T.ui, fontSize: 10, color: T.dim, marginTop: 2, lineHeight: 1.4 }}>{desc}</div>
+        </div>
+        <div style={{ transform: abierto ? "rotate(180deg)" : "none", transition: "transform 0.2s", marginTop: 2 }}><Icon n="chevron" s={14} c={T.dim} /></div>
+      </div>
+      {abierto && <div style={{ padding: "0 12px 12px" }}>{children}</div>}
+    </div>
+  );
+}
 function CritFila({ titulo, desc, children }) { return <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "7px 0" }}><div style={{ flex: 1 }}><div style={{ fontFamily: T.ui, fontSize: 13, color: T.text, fontWeight: 600 }}>{titulo}</div><div style={{ fontFamily: T.ui, fontSize: 10.5, color: T.dim }}>{desc}</div></div>{children}</div>; }
 function SubLista({ d, upd, campo, label, total, bancoOpts }) {
   return (

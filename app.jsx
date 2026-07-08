@@ -64,7 +64,7 @@ const TIPOS_ACTIVO = {
   bono:   { label: "Bono",   color: "#6A4C93", icono: "📜" },
 };
 const TIPOS_UNIDADES = ["etf", "accion", "cripto"]; // se introducen por cantidad × precio; fondo/bono por importe directo
-const APP_VERSION = "v55-econ13";
+const APP_VERSION = "v56-econ14";
 const nuevoMes = () => new Date().getMonth();
 const VACIO = { mes: nuevoMes(), mesActivo: nuevoMes(), plan: null, onboarded: false, bancos: [], inversiones: [], ingresos: [], objetivos: [], fijos: [], variables: [], anuales: [], inmuebles: [], deudas: [], presupuestos: [], puntuales: {}, ingresosMes: {}, provisionPagos: {}, cerrados: [],
   criterios: { mesesEmergencia: 6, fondoBanco: null, proMesLimite: 10, proRedondeo: 50, proBolsa: null, proExtraPct: 0, bancoNomina: null, autoAnual: false, autoAnualBanco: null, presImprevistos: 10, presRedondeo: 50 } };
@@ -241,6 +241,16 @@ function App() {
   const bolsaFondo = bancoExiste(d.criterios.fondoBanco) ? [{ id: "fondo-auto", nombre: "Fondo de emergencia", importe: fondoEmergencia, banco: d.criterios.fondoBanco, esFondo: true }] : [];
   const bolsasAuto = [...bolsasObjetivo, ...bolsaFondo];
   const disponible = saldoTotal - reservasTotal - fondoEmergencia;
+  // Separar cuentas propias de compartidas: el disponible real solo debe contar lo que controla el usuario
+  const reservasDe = (b) => (b.reservas || []).reduce((a, r) => a + n(r.importe), 0) + bolsasObjetivo.filter((x) => x.banco === b.id).reduce((a, x) => a + n(x.importe), 0);
+  const bancosPropios = d.bancos.filter((b) => !b.compartida);
+  const bancosComp = d.bancos.filter((b) => b.compartida);
+  const saldoPropio = bancosPropios.reduce((a, b) => a + n(b.saldo), 0);
+  const reservasPropias = bancosPropios.reduce((a, b) => a + reservasDe(b), 0);
+  const disponiblePropio = saldoPropio - reservasPropias - fondoEmergencia;
+  const compartidas = bancosComp.map((b) => { const mio = n(b.saldo) * 0.5; const resMio = reservasDe(b) * 0.5; return { id: b.id, nombre: b.nombre || "cuenta común", saldo: n(b.saldo), mio, resMio, dispMio: mio - resMio }; });
+  const compSaldoMio = compartidas.reduce((a, x) => a + x.mio, 0);
+  const compDispMio = compartidas.reduce((a, x) => a + x.dispMio, 0);
 
   const cuotaObjTotal = red(d.objetivos.reduce((a, o) => a + cuotaObj(o), 0), 50);
   const cuotaObjAutoTotal = objsAuto.reduce((a, o) => a + cuotaObjRed(o), 0);
@@ -720,7 +730,7 @@ function App() {
 
         {tab === "mes" && <VistaMes {...{ d, upd, n, ingresoMes, totFijos, totVar, apartarAnual, ahorroLibre, fijosEfectivos, cuotaObjAutoTotal, nombreBanco, MESES }} />}
 
-        {tab === "resumen" && <Resumen {...{ patrimonio, saldoTotal, reservasTotal, disponible, fondoEmergencia, mesesEmergencia: d.criterios.mesesEmergencia, totFijos, invValor, invInvertido, inmueblesTotal, deudasTotal, ingresoMes, gastoCorriente, apartarAnual, cuotaObjTotal, cuotaObjAutoTotal, ahorroLibre, anualPendiente, mesesRest, mesLabel: MESES[d.mes], reservaBolsa, extraFactor, bolsaLabel: bolsaSel ? bolsaSel.label : null, hayCompartidas, vacio }} />}
+        {tab === "resumen" && <Resumen {...{ patrimonio, saldoTotal, saldoPropio, reservasPropias, disponiblePropio, compartidas, compSaldoMio, compDispMio, reservasTotal, disponible, fondoEmergencia, mesesEmergencia: d.criterios.mesesEmergencia, totFijos, invValor, invInvertido, inmueblesTotal, deudasTotal, ingresoMes, gastoCorriente, apartarAnual, cuotaObjTotal, cuotaObjAutoTotal, ahorroLibre, anualPendiente, mesesRest, mesLabel: MESES[d.mes], reservaBolsa, extraFactor, bolsaLabel: bolsaSel ? bolsaSel.label : null, hayCompartidas, vacio }} />}
       </div>
     </div>
   );
@@ -1005,16 +1015,31 @@ function Resumen(x) {
   return (
     <>
       <p style={{ fontFamily: T.ui, fontSize: 11.5, color: T.dim, lineHeight: 1.5, margin: "0 0 14px" }}>Solo lectura. Todo sale de <b style={{ color: T.mid }}>Datos</b>.</p>
-      <Tarjeta grande label="Patrimonio neto" valor={eur(x.patrimonio)} color={T.accent} sub={`${eur(x.saldoTotal)} bancos · ${eur(x.invValor)} inversión${x.inmueblesTotal ? " · " + eur(x.inmueblesTotal) + " inmuebles" : ""}${x.deudasTotal ? " − " + eur(x.deudasTotal) + " deuda" : ""}`} />
+      <Tarjeta grande label="Patrimonio neto" valor={eur(x.patrimonio)} color={T.accent} sub={`${eur(x.saldoTotal)} bancos · ${eur(x.invValor)} inversión${x.inmueblesTotal ? " · " + eur(x.inmueblesTotal) + " inmuebles" : ""}${x.deudasTotal ? " − " + eur(x.deudasTotal) + " deuda" : ""}${x.compartidas.length ? " · incluye " + eur(x.compSaldoMio) + " de compartidas" : ""}`} />
       <div style={{ height: 12 }} />
       <Panel>
         <div style={{ fontFamily: T.ui, fontSize: 12, fontWeight: 700, color: T.text, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 12, display: "flex", alignItems: "center", gap: 8 }}><Icon n="shield" s={16} c={T.accent} /> Dinero disponible de verdad</div>
-        <Fila l="Saldo total en bancos" v={eur(x.saldoTotal)} />
-        <Fila l="− Bolsas de reserva" v={"−" + eur(x.reservasTotal)} c={T.dim} />
+        <Fila l={x.compartidas.length ? "Saldo en cuentas propias" : "Saldo total en bancos"} v={eur(x.saldoPropio)} />
+        <Fila l="− Bolsas de reserva" v={"−" + eur(x.reservasPropias)} c={T.dim} />
         <Fila l={`− Fondo emergencia (${x.mesesEmergencia}m fijos)`} v={"−" + eur(x.fondoEmergencia)} c={T.warn} />
         <div style={{ height: 1, background: T.line, margin: "8px 0" }} />
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}><span style={{ fontFamily: T.ui, fontSize: 13, fontWeight: 700, color: T.text }}>Disponible</span><span style={{ fontFamily: T.serif, fontSize: 26, color: x.disponible >= 0 ? T.accent : T.neg }}>{eur(x.disponible)}</span></div>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}><span style={{ fontFamily: T.ui, fontSize: 13, fontWeight: 700, color: T.text }}>Disponible</span><span style={{ fontFamily: T.serif, fontSize: 26, color: x.disponiblePropio >= 0 ? T.accent : T.neg }}>{eur(x.disponiblePropio)}</span></div>
+        {x.compartidas.length > 0 && <div style={{ fontFamily: T.ui, fontSize: 10, color: T.dim, marginTop: 8, lineHeight: 1.4 }}>Solo tus cuentas propias. Las compartidas van aparte, abajo.</div>}
       </Panel>
+      {x.compartidas.length > 0 && (
+        <Panel>
+          <div style={{ fontFamily: T.ui, fontSize: 12, fontWeight: 700, color: T.text, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 6, display: "flex", alignItems: "center", gap: 8 }}><Icon n="compartida" s={16} c={T.accent} /> Cuentas compartidas · tu parte</div>
+          <div style={{ fontFamily: T.ui, fontSize: 10.5, color: T.dim, marginBottom: 10, lineHeight: 1.45 }}>Tu 50% de las cuentas comunes. Cuenta para tu patrimonio, pero su uso es conjunto, así que no entra en el disponible de arriba.</div>
+          {x.compartidas.map((cta) => (
+            <div key={cta.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", padding: "5px 0" }}>
+              <span style={{ fontFamily: T.ui, fontSize: 12.5, color: T.mid }}>{cta.nombre} <span style={{ fontFamily: T.mono, fontSize: 9.5, color: T.dim }}>· saldo {eur(cta.saldo)}</span></span>
+              <span style={{ fontFamily: T.mono, fontSize: 12.5, fontWeight: 600, color: T.text }}>{eur(cta.dispMio)}</span>
+            </div>
+          ))}
+          <div style={{ height: 1, background: T.line, margin: "8px 0" }} />
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}><span style={{ fontFamily: T.ui, fontSize: 13, fontWeight: 700, color: T.text }}>Tu parte disponible</span><span style={{ fontFamily: T.serif, fontSize: 22, color: T.accent }}>{eur(x.compDispMio)}</span></div>
+        </Panel>
+      )}
       <Panel tono={T.accent}>
         <div style={{ fontFamily: T.ui, fontSize: 10, color: T.dim, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 10 }}>A apartar para anuales · se congelará al cerrar {x.mesLabel}</div>
         <Fila l="Pendiente del año" v={eur(x.anualPendiente)} pad="4px 0" />

@@ -64,14 +64,18 @@ const TIPOS_ACTIVO = {
   bono:   { label: "Bono",   color: "#6A4C93", icono: "📜" },
 };
 const TIPOS_UNIDADES = ["etf", "accion", "cripto"]; // se introducen por cantidad × precio; fondo/bono por importe directo
-const APP_VERSION = "v56-econ14";
+const APP_VERSION = "v57-econ15";
 const nuevoMes = () => new Date().getMonth();
+// Deuda derivada (como en la app original): saldo(M) = saldoBase − cuota × meses transcurridos desde mesBase.
+// No se muta nada: cada mes muestra su saldo exacto y el pasado no cambia.
+const mesesDesde = (mesBase, mes) => { const b = parseInt(mesBase); if (isNaN(b)) return 0; return Math.max(0, mes - b); };
+const saldoDeuda = (dd, mes) => { const base = numf(dd.saldoBase != null ? dd.saldoBase : dd.importe); const cuota = numf(dd.cuotaMensual); if (!cuota) return base; return Math.max(0, base - cuota * mesesDesde(dd.mesBase != null ? dd.mesBase : mes, mes)); };
 const VACIO = { mes: nuevoMes(), mesActivo: nuevoMes(), plan: null, onboarded: false, bancos: [], inversiones: [], ingresos: [], objetivos: [], fijos: [], variables: [], anuales: [], inmuebles: [], deudas: [], presupuestos: [], puntuales: {}, ingresosMes: {}, provisionPagos: {}, cerrados: [],
   criterios: { mesesEmergencia: 6, fondoBanco: null, proMesLimite: 10, proRedondeo: 50, proBolsa: null, proExtraPct: 0, bancoNomina: null, autoAnual: false, autoAnualBanco: null, presImprevistos: 10, presRedondeo: 50 } };
 
 const EJEMPLO = { mes: nuevoMes(), mesActivo: nuevoMes(), plan: null, onboarded: true, cerrados: [],
   inmuebles: [{ id: "in1", nombre: "Vivienda", valor: 145000 }],
-  deudas: [{ id: "de1", nombre: "Hipoteca pendiente", importe: 82000 }],
+  deudas: [{ id: "de1", nombre: "Hipoteca", saldoBase: 82000, cuotaMensual: 620, mesBase: nuevoMes() }],
   presupuestos: [{ id: "pr1", nombre: "Terraza", articulos: [{ id: "ar1", nombre: "Sofá exterior", uds: 1, precio: 650 }, { id: "ar2", nombre: "Mesa", uds: 1, precio: 180 }], imprevistos: 10, incorporado: false }],
   puntuales: {},
   bancos: [
@@ -106,7 +110,7 @@ function Campo({ value, onChange, sufijo, ancho, alinear = "right", ph }) {
 }
 function Sel({ value, onChange, opciones, ancho }) {
   return (
-    <select value={value == null ? "" : value} onChange={(e) => onChange(e.target.value)} style={{ background: T.surface, color: T.text, border: `1px solid ${T.border}`, borderRadius: 8, padding: "7px 9px", fontFamily: T.ui, fontSize: 12, maxWidth: ancho }}>
+    <select value={value == null ? "" : value} onChange={(e) => onChange(e.target.value)} style={{ background: T.surface, color: T.text, border: `1px solid ${T.border}`, borderRadius: 8, padding: "7px 9px", fontFamily: T.ui, fontSize: 12, maxWidth: ancho, width: ancho === "100%" ? "100%" : undefined }}>
       {opciones.map((o) => <option key={o.v} value={o.v}>{o.l}</option>)}
     </select>
   );
@@ -168,6 +172,7 @@ function sanearRefs(dd) {
   const hay = (id) => bancos.some((b) => b.id === id);
   const unico = bancos.length === 1 ? bancos[0].id : null;
   const arregla = (v) => (v && !hay(v) ? unico : v);
+  (dd.deudas || []).forEach((x) => { if (x.saldoBase == null) { x.saldoBase = numf(x.importe); delete x.importe; } if (x.cuotaMensual == null) x.cuotaMensual = 0; if (x.mesBase == null) x.mesBase = dd.mes != null ? dd.mes : 0; });
   (dd.objetivos || []).forEach((o) => { o.banco = arregla(o.banco); });
   (dd.fijos || []).forEach((g) => { g.banco = arregla(g.banco); });
   (dd.variables || []).forEach((g) => { g.banco = arregla(g.banco); });
@@ -263,7 +268,8 @@ function App() {
   const gastoCorriente = totFijos + totVar; // totFijos ya incluye el ahorro automatizado (objetivos + provisión anuales)
   const ahorroLibre = ingresoMes - gastoCorriente;
   const inmueblesTotal = (d.inmuebles || []).reduce((a, i) => a + n(i.valor), 0);
-  const deudasTotal = (d.deudas || []).reduce((a, x) => a + n(x.importe), 0);
+  const deudasTotal = (d.deudas || []).reduce((a, x) => a + saldoDeuda(x, d.mes), 0);
+  const cuotasDeuda = (d.deudas || []).reduce((a, x) => a + n(x.cuotaMensual), 0);
   const patrimonio = saldoTotal + invValor + inmueblesTotal - deudasTotal;
   const hayCompartidas = d.bancos.some((b) => b.compartida);
   const bancoOpts = d.bancos.map((b) => ({ v: b.id, l: b.nombre || "banco" }));
@@ -635,8 +641,8 @@ function App() {
               <AddBtn label="Añadir bloque anual" onClick={() => upd((c) => c.anuales.push({ id: uid(), nombre: "", conceptos: [] }))} />
             </Bloque>
 
-            <Bloque icon="casa" titulo="Patrimonio" sub={(d.inmuebles || []).length || (d.deudas || []).length ? `Inmuebles ${eur(inmueblesTotal)} · deudas ${eur(deudasTotal)}` : "Inmuebles y deudas"} total={inmueblesTotal - deudasTotal} abierto={!!abiertos.pat} onTog={() => tog("pat")} vacio={!(d.inmuebles || []).length && !(d.deudas || []).length}>
-              {!(d.inmuebles || []).length && !(d.deudas || []).length && <Vacio txt="Añade el valor de tus inmuebles (suman al patrimonio) y lo que debes (resta)." />}
+            <Bloque icon="casa" titulo="Patrimonio" sub={(d.inmuebles || []).length || (d.deudas || []).length ? `Inmuebles ${eur(inmueblesTotal)} · deuda hoy ${eur(deudasTotal)}` : "Inmuebles y deudas que se amortizan"} total={inmueblesTotal - deudasTotal} abierto={!!abiertos.pat} onTog={() => tog("pat")} vacio={!(d.inmuebles || []).length && !(d.deudas || []).length}>
+              {!(d.inmuebles || []).length && !(d.deudas || []).length && <Vacio txt="Añade el valor de tus inmuebles (suman al patrimonio) y tus deudas (restan). Con la cuota mensual, el saldo de la deuda baja solo cada mes." />}
               <div style={{ fontFamily: T.ui, fontSize: 11, fontWeight: 700, color: T.mid, textTransform: "uppercase", letterSpacing: "0.05em", margin: "2px 0 8px", display: "flex", alignItems: "center", gap: 6 }}><Icon n="casa" s={13} c={T.accent} /> Inmuebles</div>
               {(d.inmuebles || []).map((i) => (
                 <div key={i.id} style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 6 }}>
@@ -648,15 +654,36 @@ function App() {
               ))}
               <button onClick={() => upd((c) => { c.inmuebles = c.inmuebles || []; c.inmuebles.push({ id: uid(), nombre: "", valor: 0 }); })} style={{ background: "none", border: "none", color: T.accent, fontFamily: T.ui, fontSize: 11, fontWeight: 600, cursor: "pointer", padding: "4px 0", marginBottom: 12 }}>+ inmueble</button>
               <div style={{ fontFamily: T.ui, fontSize: 11, fontWeight: 700, color: T.mid, textTransform: "uppercase", letterSpacing: "0.05em", margin: "2px 0 8px", display: "flex", alignItems: "center", gap: 6 }}><Icon n="deuda" s={13} c={T.neg} /> Deudas</div>
-              {(d.deudas || []).map((x) => (
-                <div key={x.id} style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 6 }}>
-                  <Campo value={x.nombre} alinear="left" ph="p. ej. Hipoteca" onChange={(v) => upd((c) => { c.deudas.find((y) => y.id === x.id).nombre = v; })} />
-                  <div style={{ flex: 1 }} />
-                  <Campo value={x.importe} sufijo="€" ancho={110} onChange={(v) => upd((c) => { c.deudas.find((y) => y.id === x.id).importe = v; })} />
-                  <Del onClick={() => upd((c) => { c.deudas = c.deudas.filter((y) => y.id !== x.id); })} />
-                </div>
-              ))}
-              <button onClick={() => upd((c) => { c.deudas = c.deudas || []; c.deudas.push({ id: uid(), nombre: "", importe: 0 }); })} style={{ background: "none", border: "none", color: T.accent, fontFamily: T.ui, fontSize: 11, fontWeight: 600, cursor: "pointer", padding: "4px 0" }}>+ deuda</button>
+              {(d.deudas || []).map((x) => {
+                const base = n(x.saldoBase != null ? x.saldoBase : x.importe);
+                const cuota = n(x.cuotaMensual);
+                const mesB = x.mesBase != null ? parseInt(x.mesBase) : d.mes;
+                const hoy = saldoDeuda(x, d.mes);
+                const amortizado = Math.max(0, base - hoy);
+                const pct = base > 0 ? Math.min(100, (amortizado / base) * 100) : 0;
+                const mesesRest = cuota > 0 ? Math.ceil(hoy / cuota) : null;
+                return (
+                  <div key={x.id} style={{ background: T.surface, borderRadius: 12, padding: 12, marginBottom: 8, border: `1px solid ${T.line}` }}>
+                    <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8 }}>
+                      <Campo value={x.nombre} alinear="left" ph="p. ej. Hipoteca" onChange={(v) => upd((c) => { c.deudas.find((y) => y.id === x.id).nombre = v; })} />
+                      <Del onClick={() => upd((c) => { c.deudas = c.deudas.filter((y) => y.id !== x.id); })} />
+                    </div>
+                    <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+                      <div style={{ flex: 1 }}><div style={{ fontFamily: T.ui, fontSize: 9, color: T.dim, textTransform: "uppercase", marginBottom: 3 }}>Saldo en</div><Sel value={mesB} onChange={(v) => upd((c) => { c.deudas.find((y) => y.id === x.id).mesBase = parseInt(v); })} opciones={MESES.map((m, i) => ({ v: i, l: m }))} ancho="100%" /></div>
+                      <div style={{ flex: 1.3 }}><div style={{ fontFamily: T.ui, fontSize: 9, color: T.dim, textTransform: "uppercase", marginBottom: 3 }}>Saldo base</div><Campo value={x.saldoBase != null ? x.saldoBase : x.importe} sufijo="€" ancho="100%" onChange={(v) => upd((c) => { const y = c.deudas.find((z) => z.id === x.id); y.saldoBase = v; delete y.importe; })} /></div>
+                      <div style={{ flex: 1.1 }}><div style={{ fontFamily: T.ui, fontSize: 9, color: T.dim, textTransform: "uppercase", marginBottom: 3 }}>Cuota/mes</div><Campo value={x.cuotaMensual} sufijo="€" ancho="100%" onChange={(v) => upd((c) => { c.deudas.find((y) => y.id === x.id).cuotaMensual = v; })} /></div>
+                    </div>
+                    {cuota > 0 && <div style={{ height: 5, background: T.surface2, borderRadius: 3, overflow: "hidden", marginBottom: 6 }}><div style={{ width: pct + "%", height: "100%", background: T.accent, borderRadius: 3 }} /></div>}
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+                      <span style={{ fontFamily: T.mono, fontSize: 10, color: T.dim }}>{cuota > 0 ? `amortizado ${eur(amortizado)}${mesesRest != null ? ` · quedan ~${mesesRest} cuotas` : ""}` : "sin cuota: saldo fijo"}</span>
+                      <span style={{ fontFamily: T.mono, fontSize: 12.5, fontWeight: 700, color: T.neg }}>{eur(hoy)}</span>
+                    </div>
+                    {cuota > 0 && <div style={{ fontFamily: T.ui, fontSize: 9.5, color: T.dim, marginTop: 4, lineHeight: 1.4 }}>Saldo en {MESES[d.mes]}: {eur(base)} − {eur(cuota)} × {Math.max(0, d.mes - mesB)} {Math.max(0, d.mes - mesB) === 1 ? "mes" : "meses"}.</div>}
+                  </div>
+                );
+              })}
+              <button onClick={() => upd((c) => { c.deudas = c.deudas || []; c.deudas.push({ id: uid(), nombre: "", saldoBase: 0, cuotaMensual: 0, mesBase: c.mes }); })} style={{ background: "none", border: "none", color: T.accent, fontFamily: T.ui, fontSize: 11, fontWeight: 600, cursor: "pointer", padding: "4px 0" }}>+ deuda</button>
+              {cuotasDeuda > 0 && <div style={{ fontFamily: T.ui, fontSize: 10, color: T.dim, marginTop: 6, lineHeight: 1.4 }}>El saldo baja solo cada mes según la cuota. Si la cuota ya está en tus gastos fijos, no la añadas dos veces.</div>}
             </Bloque>
 
             <Bloque icon="carro" titulo="Presupuestos" sub={(d.presupuestos || []).length ? "Previsión de compras · incorpora a anuales" : "Prevé compras y pásalas a anuales"} abierto={!!abiertos.pre} onTog={() => tog("pre")} onCrit={() => irACriterio("critPre", "crit-pre")} vacio={!(d.presupuestos || []).length}>
@@ -730,7 +757,7 @@ function App() {
 
         {tab === "mes" && <VistaMes {...{ d, upd, n, ingresoMes, totFijos, totVar, apartarAnual, ahorroLibre, fijosEfectivos, cuotaObjAutoTotal, nombreBanco, MESES }} />}
 
-        {tab === "resumen" && <Resumen {...{ patrimonio, saldoTotal, saldoPropio, reservasPropias, disponiblePropio, compartidas, compSaldoMio, compDispMio, reservasTotal, disponible, fondoEmergencia, mesesEmergencia: d.criterios.mesesEmergencia, totFijos, invValor, invInvertido, inmueblesTotal, deudasTotal, ingresoMes, gastoCorriente, apartarAnual, cuotaObjTotal, cuotaObjAutoTotal, ahorroLibre, anualPendiente, mesesRest, mesLabel: MESES[d.mes], reservaBolsa, extraFactor, bolsaLabel: bolsaSel ? bolsaSel.label : null, hayCompartidas, vacio }} />}
+        {tab === "resumen" && <Resumen {...{ patrimonio, saldoTotal, saldoPropio, reservasPropias, disponiblePropio, compartidas, compSaldoMio, compDispMio, reservasTotal, disponible, fondoEmergencia, mesesEmergencia: d.criterios.mesesEmergencia, totFijos, invValor, invInvertido, inmueblesTotal, deudasTotal, cuotasDeuda, deudasDetalle: (d.deudas || []).map((x) => ({ id: x.id, nombre: x.nombre || "deuda", saldo: saldoDeuda(x, d.mes), cuota: n(x.cuotaMensual) })), ingresoMes, gastoCorriente, apartarAnual, cuotaObjTotal, cuotaObjAutoTotal, ahorroLibre, anualPendiente, mesesRest, mesLabel: MESES[d.mes], reservaBolsa, extraFactor, bolsaLabel: bolsaSel ? bolsaSel.label : null, hayCompartidas, vacio }} />}
       </div>
     </div>
   );
@@ -1038,6 +1065,20 @@ function Resumen(x) {
           ))}
           <div style={{ height: 1, background: T.line, margin: "8px 0" }} />
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}><span style={{ fontFamily: T.ui, fontSize: 13, fontWeight: 700, color: T.text }}>Tu parte disponible</span><span style={{ fontFamily: T.serif, fontSize: 22, color: T.accent }}>{eur(x.compDispMio)}</span></div>
+        </Panel>
+      )}
+      {(x.inmueblesTotal > 0 || x.deudasDetalle.length > 0) && (
+        <Panel>
+          <div style={{ fontFamily: T.ui, fontSize: 12, fontWeight: 700, color: T.text, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 10, display: "flex", alignItems: "center", gap: 8 }}><Icon n="casa" s={16} c={T.accent} /> Patrimonio · {x.mesLabel}</div>
+          <Fila l="Saldo en bancos" v={eur(x.saldoTotal)} />
+          <Fila l="+ Inversiones" v={"+" + eur(x.invValor)} c={T.mid} />
+          {x.inmueblesTotal > 0 && <Fila l="+ Inmuebles" v={"+" + eur(x.inmueblesTotal)} c={T.mid} />}
+          {x.deudasDetalle.map((dd) => (
+            <Fila key={dd.id} l={`− ${dd.nombre}${dd.cuota > 0 ? ` (−${eur(dd.cuota)}/mes)` : ""}`} v={"−" + eur(dd.saldo)} c={T.neg} />
+          ))}
+          <div style={{ height: 1, background: T.line, margin: "8px 0" }} />
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}><span style={{ fontFamily: T.ui, fontSize: 13, fontWeight: 700, color: T.text }}>Patrimonio neto</span><span style={{ fontFamily: T.serif, fontSize: 26, color: T.accent }}>{eur(x.patrimonio)}</span></div>
+          {x.cuotasDeuda > 0 && <div style={{ fontFamily: T.ui, fontSize: 10, color: T.dim, marginTop: 8, lineHeight: 1.45 }}>La deuda baja {eur(x.cuotasDeuda)} cada mes: al cambiar de mes, el patrimonio neto sube esa cantidad automáticamente.</div>}
         </Panel>
       )}
       <Panel tono={T.accent}>

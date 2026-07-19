@@ -64,18 +64,43 @@ const TIPOS_ACTIVO = {
   bono:   { label: "Bono",   color: "#6A4C93", icono: "📜" },
 };
 const TIPOS_UNIDADES = ["etf", "accion", "cripto"]; // se introducen por cantidad × precio; fondo/bono por importe directo
-const APP_VERSION = "v57-econ15";
-const nuevoMes = () => new Date().getMonth();
-// Deuda derivada (como en la app original): saldo(M) = saldoBase − cuota × meses transcurridos desde mesBase.
-// No se muta nada: cada mes muestra su saldo exacto y el pasado no cambia.
+const APP_VERSION = "v59-econ17";
+const nuevoMes = () => new Date().getFullYear() * 12 + new Date().getMonth();
+const mesNom = (m) => MESES[((Math.round(m) % 12) + 12) % 12];
+const anioDe = (m) => Math.floor(m / 12);
+const mesLbl = (m) => mesNom(m) + " " + anioDe(m);
+// Deuda tipo préstamo francés: cuota fija, cada mes cambia el reparto interés/capital.
+// Datos: capitalInicial (C0), saldoActual (S) en su mesBase, tin (% anual), plazoAnios (N).
+// No se muta nada: el saldo de cada mes se deriva; el pasado no cambia.
 const mesesDesde = (mesBase, mes) => { const b = parseInt(mesBase); if (isNaN(b)) return 0; return Math.max(0, mes - b); };
-const saldoDeuda = (dd, mes) => { const base = numf(dd.saldoBase != null ? dd.saldoBase : dd.importe); const cuota = numf(dd.cuotaMensual); if (!cuota) return base; return Math.max(0, base - cuota * mesesDesde(dd.mesBase != null ? dd.mesBase : mes, mes)); };
+function analizarDeuda(dd) {
+  const C0 = numf(dd.capitalInicial), S = numf(dd.saldoActual != null ? dd.saldoActual : dd.saldoBase != null ? dd.saldoBase : dd.importe);
+  const N = Math.round(numf(dd.plazoAnios) * 12), i = numf(dd.tin) / 100 / 12;
+  let cuota = 0;
+  if (N > 0) cuota = i > 0 ? C0 * i / (1 - Math.pow(1 + i, -N)) : C0 / N;
+  else if (numf(dd.cuotaMensual) > 0) cuota = numf(dd.cuotaMensual); // compat modelo lineal
+  let cr = 0;
+  if (cuota > 0) { if (i > 0) { const arg = 1 - (S * i) / cuota; cr = arg > 0 ? -Math.log(arg) / Math.log(1 + i) : N; } else cr = S / cuota; }
+  cr = N > 0 ? Math.max(0, Math.min(N, cr)) : Math.max(0, cr);
+  const cp = N > 0 ? Math.max(0, N - cr) : 0;
+  return { cuota, N, C0, S, cuotasRestantes: Math.round(cr), cuotasPagadas: Math.round(cp), pctPagado: C0 > 0 ? Math.min(100, ((C0 - S) / C0) * 100) : 0 };
+}
+function saldoDeuda(dd, mes) {
+  const S = numf(dd.saldoActual != null ? dd.saldoActual : dd.saldoBase != null ? dd.saldoBase : dd.importe);
+  const t = mesesDesde(dd.mesBase != null ? dd.mesBase : mes, mes);
+  if (t === 0) return S;
+  const i = numf(dd.tin) / 100 / 12;
+  const { cuota } = analizarDeuda(dd);
+  if (cuota <= 0) return S;
+  if (i > 0) { const f = Math.pow(1 + i, t); return Math.max(0, S * f - cuota * ((f - 1) / i)); }
+  return Math.max(0, S - cuota * t);
+}
 const VACIO = { mes: nuevoMes(), mesActivo: nuevoMes(), plan: null, onboarded: false, bancos: [], inversiones: [], ingresos: [], objetivos: [], fijos: [], variables: [], anuales: [], inmuebles: [], deudas: [], presupuestos: [], puntuales: {}, ingresosMes: {}, provisionPagos: {}, cerrados: [],
   criterios: { mesesEmergencia: 6, fondoBanco: null, proMesLimite: 10, proRedondeo: 50, proBolsa: null, proExtraPct: 0, bancoNomina: null, autoAnual: false, autoAnualBanco: null, presImprevistos: 10, presRedondeo: 50 } };
 
 const EJEMPLO = { mes: nuevoMes(), mesActivo: nuevoMes(), plan: null, onboarded: true, cerrados: [],
   inmuebles: [{ id: "in1", nombre: "Vivienda", valor: 145000 }],
-  deudas: [{ id: "de1", nombre: "Hipoteca", saldoBase: 82000, cuotaMensual: 620, mesBase: nuevoMes() }],
+  deudas: [{ id: "de1", nombre: "Hipoteca", capitalInicial: 120000, saldoActual: 82000, tin: 2.5, plazoAnios: 25, mesBase: nuevoMes() }],
   presupuestos: [{ id: "pr1", nombre: "Terraza", articulos: [{ id: "ar1", nombre: "Sofá exterior", uds: 1, precio: 650 }, { id: "ar2", nombre: "Mesa", uds: 1, precio: 180 }], imprevistos: 10, incorporado: false }],
   puntuales: {},
   bancos: [
@@ -172,7 +197,14 @@ function sanearRefs(dd) {
   const hay = (id) => bancos.some((b) => b.id === id);
   const unico = bancos.length === 1 ? bancos[0].id : null;
   const arregla = (v) => (v && !hay(v) ? unico : v);
-  (dd.deudas || []).forEach((x) => { if (x.saldoBase == null) { x.saldoBase = numf(x.importe); delete x.importe; } if (x.cuotaMensual == null) x.cuotaMensual = 0; if (x.mesBase == null) x.mesBase = dd.mes != null ? dd.mes : 0; });
+  (dd.deudas || []).forEach((x) => {
+    if (x.saldoActual == null) x.saldoActual = numf(x.saldoBase != null ? x.saldoBase : x.importe);
+    if (x.capitalInicial == null) x.capitalInicial = x.saldoActual;
+    if (x.tin == null) x.tin = 0;
+    if (x.plazoAnios == null) x.plazoAnios = x.cuotaMensual > 0 && x.saldoActual > 0 ? Math.round((x.saldoActual / x.cuotaMensual) / 12 * 10) / 10 : 0;
+    if (x.mesBase == null) x.mesBase = dd.mes != null ? dd.mes : 0;
+    delete x.importe; delete x.saldoBase; delete x.cuotaMensual;
+  });
   (dd.objetivos || []).forEach((o) => { o.banco = arregla(o.banco); });
   (dd.fijos || []).forEach((g) => { g.banco = arregla(g.banco); });
   (dd.variables || []).forEach((g) => { g.banco = arregla(g.banco); });
@@ -185,7 +217,24 @@ function sanearRefs(dd) {
   }
   return dd;
 }
-function cargarDatos() { try { const s = localStorage.getItem(STORAGE_KEY); return s ? sanearRefs(normalizarIds({ ...VACIO, ...JSON.parse(s) })) : VACIO; } catch (e) { return VACIO; } }
+function migrarTiempo(dd) {
+  if (dd.mes == null || dd.mes >= 1000) return dd; // ya es absoluto (o vacío)
+  const A = new Date().getFullYear();
+  const abs = (m) => A * 12 + (parseInt(m) || 0);
+  const reclave = (obj) => { const r = {}; Object.keys(obj || {}).forEach((k) => { r[String(abs(k))] = obj[k]; }); return r; };
+  dd.mes = abs(dd.mes);
+  dd.mesActivo = dd.mesActivo != null ? abs(dd.mesActivo) : dd.mes;
+  dd.cerrados = (dd.cerrados || []).map(abs);
+  if (dd.plan) { if (dd.plan.mes != null) dd.plan.mes = abs(dd.plan.mes); if (dd.plan.origen != null) dd.plan.origen = abs(dd.plan.origen); }
+  dd.puntuales = reclave(dd.puntuales);
+  dd.ingresosMes = reclave(dd.ingresosMes);
+  dd.provisionPagos = reclave(dd.provisionPagos);
+  (dd.anuales || []).forEach((cc) => (cc.conceptos || []).forEach((x) => (x.pagos || []).forEach((p) => { if (p.mes != null) p.mes = abs(p.mes); })));
+  (dd.objetivos || []).forEach((o) => { if (o.aportaciones) o.aportaciones = reclave(o.aportaciones); });
+  (dd.deudas || []).forEach((x) => { if (x.mesBase != null && x.mesBase < 1000) x.mesBase = abs(x.mesBase); });
+  return dd;
+}
+function cargarDatos() { try { const s = localStorage.getItem(STORAGE_KEY); return s ? sanearRefs(migrarTiempo(normalizarIds({ ...VACIO, ...JSON.parse(s) }))) : VACIO; } catch (e) { return VACIO; } }
 function guardarDatos(dd) { try { localStorage.setItem(STORAGE_KEY, JSON.stringify(dd)); } catch (e) {} }
 
 function App() {
@@ -211,7 +260,9 @@ function App() {
   const anualTotal = d.anuales.reduce((a, c) => a + c.conceptos.reduce((s, x) => s + n(x.importe), 0), 0);
   const anualPagado = d.anuales.reduce((a, c) => a + c.conceptos.reduce((s, x) => s + pagadoConcepto(x), 0), 0);
   const anualPendiente = anualTotal - anualPagado;
-  const mesesRest = Math.max(1, d.criterios.proMesLimite - d.mes + 1);
+  const mesAnioActual = ((d.mes % 12) + 12) % 12;
+  let _mrest = d.criterios.proMesLimite - mesAnioActual + 1; if (_mrest < 1) _mrest += 12;
+  const mesesRest = Math.max(1, _mrest);
   const todasBolsas = d.bancos.flatMap((b) => b.reservas.map((r) => ({ id: r.id, importe: n(r.importe), label: `${b.nombre} · ${r.nombre || "bolsa"}` })));
   const bolsaSel = todasBolsas.find((x) => x.id === d.criterios.proBolsa);
   const reservaBolsa = bolsaSel ? bolsaSel.importe : 0;
@@ -269,7 +320,7 @@ function App() {
   const ahorroLibre = ingresoMes - gastoCorriente;
   const inmueblesTotal = (d.inmuebles || []).reduce((a, i) => a + n(i.valor), 0);
   const deudasTotal = (d.deudas || []).reduce((a, x) => a + saldoDeuda(x, d.mes), 0);
-  const cuotasDeuda = (d.deudas || []).reduce((a, x) => a + n(x.cuotaMensual), 0);
+  const cuotasDeuda = (d.deudas || []).reduce((a, x) => a + analizarDeuda(x).cuota, 0);
   const patrimonio = saldoTotal + invValor + inmueblesTotal - deudasTotal;
   const hayCompartidas = d.bancos.some((b) => b.compartida);
   const bancoOpts = d.bancos.map((b) => ({ v: b.id, l: b.nombre || "banco" }));
@@ -307,9 +358,9 @@ function App() {
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 6, background: T.panel, border: `1px solid ${T.border}`, borderRadius: 10, padding: "4px 6px", boxShadow: T.shadow }}>
-              <button onClick={() => upd((c) => { c.mes = (c.mes + 11) % 12; })} style={{ background: "none", border: "none", cursor: "pointer", padding: 2 }}><Icon n="chevL" s={16} c={T.dim} /></button>
-              <span style={{ fontFamily: T.ui, fontSize: 12, fontWeight: 700, color: T.text, width: 30, textAlign: "center" }}>{MESES[d.mes]}</span>
-              <button onClick={() => upd((c) => { c.mes = (c.mes + 1) % 12; })} style={{ background: "none", border: "none", cursor: "pointer", padding: 2 }}><Icon n="chevR" s={16} c={T.dim} /></button>
+              <button onClick={() => upd((c) => { c.mes = c.mes - 1; })} style={{ background: "none", border: "none", cursor: "pointer", padding: 2 }}><Icon n="chevL" s={16} c={T.dim} /></button>
+              <div style={{ textAlign: "center", minWidth: 54 }}><div style={{ fontFamily: T.ui, fontSize: 12, fontWeight: 700, color: T.text, lineHeight: 1 }}>{mesNom(d.mes)}</div><div style={{ fontFamily: T.mono, fontSize: 8.5, color: T.dim, marginTop: 1 }}>{anioDe(d.mes)}</div></div>
+              <button onClick={() => upd((c) => { c.mes = c.mes + 1; })} style={{ background: "none", border: "none", cursor: "pointer", padding: 2 }}><Icon n="chevR" s={16} c={T.dim} /></button>
             </div>
             <button onClick={() => setAjustes(true)} style={{ background: T.panel, border: `1px solid ${T.border}`, borderRadius: 10, padding: "7px", cursor: "pointer", boxShadow: T.shadow, display: "flex" }}><Icon n="cog" s={17} c={T.mid} /></button>
           </div>
@@ -622,15 +673,15 @@ function App() {
                           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                             <div style={{ flex: 1, height: 5, background: T.surface2, borderRadius: 3, overflow: "hidden" }}><div style={{ width: pct + "%", height: "100%", background: pct >= 100 ? T.accent : T.warn, borderRadius: 3 }} /></div>
                             <span style={{ fontFamily: T.mono, fontSize: 9.5, color: T.dim, width: 66, textAlign: "right" }}>{eur(pg)}/{eur(x.importe)}</span>
-                            <button onClick={() => upd((c) => { const z = c.anuales.find((y) => y.id === cat.id).conceptos.find((w) => w.id === x.id); if (pagadoEsteMes) { z.pagos = z.pagos.filter((p) => p.mes !== d.mes); } else { const pend = n(z.importe) - z.pagos.reduce((a, p) => a + n(p.importe), 0); z.pagos.push({ id: uid(), mes: d.mes, importe: Math.max(0, pend) }); } })} style={{ fontFamily: T.ui, fontSize: 10, fontWeight: 700, border: "none", borderRadius: 7, padding: "5px 9px", cursor: "pointer", background: pagadoEsteMes ? `${T.accent}18` : T.surface2, color: pagadoEsteMes ? T.accent : T.mid }}>{pagadoEsteMes ? "✓ " + MESES[d.mes] : "Pagar"}</button>
+                            <button onClick={() => upd((c) => { const z = c.anuales.find((y) => y.id === cat.id).conceptos.find((w) => w.id === x.id); if (pagadoEsteMes) { z.pagos = z.pagos.filter((p) => p.mes !== d.mes); } else { const pend = n(z.importe) - z.pagos.reduce((a, p) => a + n(p.importe), 0); z.pagos.push({ id: uid(), mes: d.mes, importe: Math.max(0, pend) }); } })} style={{ fontFamily: T.ui, fontSize: 10, fontWeight: 700, border: "none", borderRadius: 7, padding: "5px 9px", cursor: "pointer", background: pagadoEsteMes ? `${T.accent}18` : T.surface2, color: pagadoEsteMes ? T.accent : T.mid }}>{pagadoEsteMes ? "✓ " + mesNom(d.mes) : "Pagar"}</button>
                           </div>
                           {pagadoEsteMes && (
                             <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 5 }}>
-                              <span style={{ fontFamily: T.ui, fontSize: 9.5, color: T.dim, textTransform: "uppercase", letterSpacing: "0.05em" }}>Pagado en {MESES[d.mes]}</span>
+                              <span style={{ fontFamily: T.ui, fontSize: 9.5, color: T.dim, textTransform: "uppercase", letterSpacing: "0.05em" }}>Pagado en {mesNom(d.mes)}</span>
                               <Campo value={x.pagos.find((p) => p.mes === d.mes).importe} sufijo="€" ancho={92} onChange={(v) => upd((c) => { const z = c.anuales.find((y) => y.id === cat.id).conceptos.find((w) => w.id === x.id); const p = z.pagos.find((q) => q.mes === c.mes); if (p) p.importe = v; })} />
                             </div>
                           )}
-                          {x.pagos.length > 0 && <div style={{ fontFamily: T.mono, fontSize: 9, color: T.dim, marginTop: 4 }}>{x.pagos.map((p) => MESES[p.mes] + " " + eur(p.importe)).join(" · ")}</div>}
+                          {x.pagos.length > 0 && <div style={{ fontFamily: T.mono, fontSize: 9, color: T.dim, marginTop: 4 }}>{x.pagos.map((p) => mesLbl(p.mes) + " " + eur(p.importe)).join(" · ")}</div>}
                         </div>
                       );
                     })}
@@ -655,13 +706,11 @@ function App() {
               <button onClick={() => upd((c) => { c.inmuebles = c.inmuebles || []; c.inmuebles.push({ id: uid(), nombre: "", valor: 0 }); })} style={{ background: "none", border: "none", color: T.accent, fontFamily: T.ui, fontSize: 11, fontWeight: 600, cursor: "pointer", padding: "4px 0", marginBottom: 12 }}>+ inmueble</button>
               <div style={{ fontFamily: T.ui, fontSize: 11, fontWeight: 700, color: T.mid, textTransform: "uppercase", letterSpacing: "0.05em", margin: "2px 0 8px", display: "flex", alignItems: "center", gap: 6 }}><Icon n="deuda" s={13} c={T.neg} /> Deudas</div>
               {(d.deudas || []).map((x) => {
-                const base = n(x.saldoBase != null ? x.saldoBase : x.importe);
-                const cuota = n(x.cuotaMensual);
-                const mesB = x.mesBase != null ? parseInt(x.mesBase) : d.mes;
+                const a = analizarDeuda(x);
                 const hoy = saldoDeuda(x, d.mes);
-                const amortizado = Math.max(0, base - hoy);
-                const pct = base > 0 ? Math.min(100, (amortizado / base) * 100) : 0;
-                const mesesRest = cuota > 0 ? Math.ceil(hoy / cuota) : null;
+                const mesB = x.mesBase != null ? parseInt(x.mesBase) : d.mes;
+                const aniosRest = Math.floor(a.cuotasRestantes / 12), mesesRest = a.cuotasRestantes % 12;
+                const interesMes = hoy * (numf(x.tin) / 100 / 12);
                 return (
                   <div key={x.id} style={{ background: T.surface, borderRadius: 12, padding: 12, marginBottom: 8, border: `1px solid ${T.line}` }}>
                     <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8 }}>
@@ -669,20 +718,35 @@ function App() {
                       <Del onClick={() => upd((c) => { c.deudas = c.deudas.filter((y) => y.id !== x.id); })} />
                     </div>
                     <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
-                      <div style={{ flex: 1 }}><div style={{ fontFamily: T.ui, fontSize: 9, color: T.dim, textTransform: "uppercase", marginBottom: 3 }}>Saldo en</div><Sel value={mesB} onChange={(v) => upd((c) => { c.deudas.find((y) => y.id === x.id).mesBase = parseInt(v); })} opciones={MESES.map((m, i) => ({ v: i, l: m }))} ancho="100%" /></div>
-                      <div style={{ flex: 1.3 }}><div style={{ fontFamily: T.ui, fontSize: 9, color: T.dim, textTransform: "uppercase", marginBottom: 3 }}>Saldo base</div><Campo value={x.saldoBase != null ? x.saldoBase : x.importe} sufijo="€" ancho="100%" onChange={(v) => upd((c) => { const y = c.deudas.find((z) => z.id === x.id); y.saldoBase = v; delete y.importe; })} /></div>
-                      <div style={{ flex: 1.1 }}><div style={{ fontFamily: T.ui, fontSize: 9, color: T.dim, textTransform: "uppercase", marginBottom: 3 }}>Cuota/mes</div><Campo value={x.cuotaMensual} sufijo="€" ancho="100%" onChange={(v) => upd((c) => { c.deudas.find((y) => y.id === x.id).cuotaMensual = v; })} /></div>
+                      <div style={{ flex: 1 }}><div style={{ fontFamily: T.ui, fontSize: 9, color: T.dim, textTransform: "uppercase", marginBottom: 3 }}>Capital inicial</div><Campo value={x.capitalInicial} sufijo="€" ancho="100%" onChange={(v) => upd((c) => { c.deudas.find((y) => y.id === x.id).capitalInicial = v; })} /></div>
+                      <div style={{ width: 78 }}><div style={{ fontFamily: T.ui, fontSize: 9, color: T.dim, textTransform: "uppercase", marginBottom: 3 }}>Plazo años</div><Campo value={x.plazoAnios} ancho="100%" onChange={(v) => upd((c) => { c.deudas.find((y) => y.id === x.id).plazoAnios = v; })} /></div>
+                      <div style={{ width: 70 }}><div style={{ fontFamily: T.ui, fontSize: 9, color: T.dim, textTransform: "uppercase", marginBottom: 3 }}>TIN</div><Campo value={x.tin} sufijo="%" ancho="100%" onChange={(v) => upd((c) => { c.deudas.find((y) => y.id === x.id).tin = v; })} /></div>
                     </div>
-                    {cuota > 0 && <div style={{ height: 5, background: T.surface2, borderRadius: 3, overflow: "hidden", marginBottom: 6 }}><div style={{ width: pct + "%", height: "100%", background: T.accent, borderRadius: 3 }} /></div>}
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
-                      <span style={{ fontFamily: T.mono, fontSize: 10, color: T.dim }}>{cuota > 0 ? `amortizado ${eur(amortizado)}${mesesRest != null ? ` · quedan ~${mesesRest} cuotas` : ""}` : "sin cuota: saldo fijo"}</span>
-                      <span style={{ fontFamily: T.mono, fontSize: 12.5, fontWeight: 700, color: T.neg }}>{eur(hoy)}</span>
+                    <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+                      <div style={{ flex: 1 }}><div style={{ fontFamily: T.ui, fontSize: 9, color: T.dim, textTransform: "uppercase", marginBottom: 3 }}>Saldo actual</div><Campo value={x.saldoActual} sufijo="€" ancho="100%" onChange={(v) => upd((c) => { c.deudas.find((y) => y.id === x.id).saldoActual = v; })} /></div>
+                      <div style={{ flex: 1 }}><div style={{ fontFamily: T.ui, fontSize: 9, color: T.dim, textTransform: "uppercase", marginBottom: 3 }}>Ese saldo, en</div><Sel value={mesB} onChange={(v) => upd((c) => { c.deudas.find((y) => y.id === x.id).mesBase = parseInt(v); })} opciones={Array.from({ length: 25 }, (_, k) => d.mes - 18 + k).map((m) => ({ v: m, l: mesLbl(m) }))} ancho="100%" /></div>
                     </div>
-                    {cuota > 0 && <div style={{ fontFamily: T.ui, fontSize: 9.5, color: T.dim, marginTop: 4, lineHeight: 1.4 }}>Saldo en {MESES[d.mes]}: {eur(base)} − {eur(cuota)} × {Math.max(0, d.mes - mesB)} {Math.max(0, d.mes - mesB) === 1 ? "mes" : "meses"}.</div>}
+                    <div style={{ background: `${T.accent}0c`, border: `1px solid ${T.accent}30`, borderRadius: 9, padding: "9px 11px", marginBottom: 8 }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+                        <span style={{ fontFamily: T.ui, fontSize: 11, color: T.mid, fontWeight: 600 }}>Cuota calculada</span>
+                        <span style={{ fontFamily: T.serif, fontSize: 20, color: T.accent }}>{a.cuota > 0 ? eur(a.cuota) : "—"}<span style={{ fontFamily: T.ui, fontSize: 11, color: T.dim }}>/mes</span></span>
+                      </div>
+                      <div style={{ fontFamily: T.ui, fontSize: 9.5, color: T.dim, marginTop: 3, lineHeight: 1.4 }}>Compárala con la cuota real de tu banco: si coincide, los datos son correctos.</div>
+                    </div>
+                    {a.cuota > 0 && (
+                      <>
+                        <div style={{ height: 5, background: T.surface2, borderRadius: 3, overflow: "hidden", marginBottom: 6 }}><div style={{ width: a.pctPagado + "%", height: "100%", background: T.accent, borderRadius: 3 }} /></div>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+                          <span style={{ fontFamily: T.mono, fontSize: 10, color: T.dim }}>saldo hoy · quedan {aniosRest > 0 ? `${aniosRest}a ` : ""}{mesesRest}m</span>
+                          <span style={{ fontFamily: T.mono, fontSize: 12.5, fontWeight: 700, color: T.neg }}>{eur(hoy)}</span>
+                        </div>
+                        <div style={{ fontFamily: T.ui, fontSize: 9.5, color: T.dim, marginTop: 4, lineHeight: 1.4 }}>De la próxima cuota, ~{eur(interesMes)} son intereses y ~{eur(a.cuota - interesMes)} amortizan capital.</div>
+                      </>
+                    )}
                   </div>
                 );
               })}
-              <button onClick={() => upd((c) => { c.deudas = c.deudas || []; c.deudas.push({ id: uid(), nombre: "", saldoBase: 0, cuotaMensual: 0, mesBase: c.mes }); })} style={{ background: "none", border: "none", color: T.accent, fontFamily: T.ui, fontSize: 11, fontWeight: 600, cursor: "pointer", padding: "4px 0" }}>+ deuda</button>
+              <button onClick={() => upd((c) => { c.deudas = c.deudas || []; c.deudas.push({ id: uid(), nombre: "", capitalInicial: 0, saldoActual: 0, tin: 0, plazoAnios: 0, mesBase: c.mes }); })} style={{ background: "none", border: "none", color: T.accent, fontFamily: T.ui, fontSize: 11, fontWeight: 600, cursor: "pointer", padding: "4px 0" }}>+ deuda</button>
               {cuotasDeuda > 0 && <div style={{ fontFamily: T.ui, fontSize: 10, color: T.dim, marginTop: 6, lineHeight: 1.4 }}>El saldo baja solo cada mes según la cuota. Si la cuota ya está en tus gastos fijos, no la añadas dos veces.</div>}
             </Bloque>
 
@@ -757,7 +821,7 @@ function App() {
 
         {tab === "mes" && <VistaMes {...{ d, upd, n, ingresoMes, totFijos, totVar, apartarAnual, ahorroLibre, fijosEfectivos, cuotaObjAutoTotal, nombreBanco, MESES }} />}
 
-        {tab === "resumen" && <Resumen {...{ patrimonio, saldoTotal, saldoPropio, reservasPropias, disponiblePropio, compartidas, compSaldoMio, compDispMio, reservasTotal, disponible, fondoEmergencia, mesesEmergencia: d.criterios.mesesEmergencia, totFijos, invValor, invInvertido, inmueblesTotal, deudasTotal, cuotasDeuda, deudasDetalle: (d.deudas || []).map((x) => ({ id: x.id, nombre: x.nombre || "deuda", saldo: saldoDeuda(x, d.mes), cuota: n(x.cuotaMensual) })), ingresoMes, gastoCorriente, apartarAnual, cuotaObjTotal, cuotaObjAutoTotal, ahorroLibre, anualPendiente, mesesRest, mesLabel: MESES[d.mes], reservaBolsa, extraFactor, bolsaLabel: bolsaSel ? bolsaSel.label : null, hayCompartidas, vacio }} />}
+        {tab === "resumen" && <Resumen {...{ patrimonio, saldoTotal, saldoPropio, reservasPropias, disponiblePropio, compartidas, compSaldoMio, compDispMio, reservasTotal, disponible, fondoEmergencia, mesesEmergencia: d.criterios.mesesEmergencia, totFijos, invValor, invInvertido, inmueblesTotal, deudasTotal, cuotasDeuda, deudasDetalle: (d.deudas || []).map((x) => ({ id: x.id, nombre: x.nombre || "deuda", saldo: saldoDeuda(x, d.mes), cuota: analizarDeuda(x).cuota })), ingresoMes, gastoCorriente, apartarAnual, cuotaObjTotal, cuotaObjAutoTotal, ahorroLibre, anualPendiente, mesesRest, mesLabel: mesNom(d.mes), reservaBolsa, extraFactor, bolsaLabel: bolsaSel ? bolsaSel.label : null, hayCompartidas, vacio }} />}
       </div>
     </div>
   );
@@ -835,12 +899,12 @@ function VistaMes({ d, upd, n, ingresoMes, apartarAnual, fijosEfectivos, nombreB
     }
     const arr = tipo === "F" ? c.fijos : c.variables; const g = arr.find((x) => x.id === id); if (!g) return; g.pagados = g.pagados || []; g.pagados = g.pagados.includes(c.mes) ? g.pagados.filter((m) => m !== c.mes) : [...g.pagados, c.mes];
   }); };
-  const sig = (d.mes + 1) % 12;
+  const sig = d.mes + 1;
   const cerrarYAvanzar = () => upd((c) => {
     if (!c.cerrados.includes(c.mes)) c.cerrados = [...c.cerrados, c.mes];
     const cuotas = {}; fijosEfectivos.forEach((g) => { if (g.esObjetivo) cuotas[g.objetivoId] = numf(g.importe); });
-    c.plan = { mes: (c.mes + 1) % 12, cuotas, apartarAnual: numf(apartarAnual), origen: c.mes };
-    c.mesActivo = (c.mes + 1) % 12;
+    c.plan = { mes: c.mes + 1, cuotas, apartarAnual: numf(apartarAnual), origen: c.mes };
+    c.mesActivo = c.mes + 1;
     c.mes = c.mesActivo;
   });
   const reabrir = () => upd((c) => { c.cerrados = c.cerrados.filter((m) => m !== c.mes); });
@@ -851,15 +915,15 @@ function VistaMes({ d, upd, n, ingresoMes, apartarAnual, fijosEfectivos, nombreB
       {soloLectura ? (
         <div style={{ display: "flex", alignItems: "center", gap: 9, background: `${T.warn}0e`, border: `1px solid ${T.warn}44`, borderRadius: 12, padding: "10px 12px", marginBottom: 12 }}>
           <Icon n="info" s={15} c={T.warn} />
-          <span style={{ flex: 1, fontFamily: T.ui, fontSize: 11, color: T.mid, lineHeight: 1.4 }}>Solo consulta: el mes activo es <b style={{ color: T.warn }}>{MESES[mesActivo]}</b>. Aquí no se modifica nada.</span>
-          <button onClick={activarMes} style={{ fontFamily: T.ui, fontSize: 10.5, fontWeight: 700, border: `1px solid ${T.warn}66`, background: "none", color: T.warn, borderRadius: 8, padding: "6px 10px", cursor: "pointer", flexShrink: 0 }}>Activar {MESES[d.mes]}</button>
+          <span style={{ flex: 1, fontFamily: T.ui, fontSize: 11, color: T.mid, lineHeight: 1.4 }}>Solo consulta: el mes activo es <b style={{ color: T.warn }}>{mesLbl(mesActivo)}</b>. Aquí no se modifica nada.</span>
+          <button onClick={activarMes} style={{ fontFamily: T.ui, fontSize: 10.5, fontWeight: 700, border: `1px solid ${T.warn}66`, background: "none", color: T.warn, borderRadius: 8, padding: "6px 10px", cursor: "pointer", flexShrink: 0 }}>Activar {mesNom(d.mes)}</button>
         </div>
       ) : (
-        <p style={{ fontFamily: T.ui, fontSize: 11.5, color: T.dim, lineHeight: 1.5, margin: "0 0 12px" }}><b style={{ color: T.accent }}>{MESES[d.mes]}</b> es el mes activo: lo que marques aquí actualiza tus Datos.{plan && <> El ahorro automático sigue el plan congelado al cerrar {MESES[plan.origen]}.</>}</p>
+        <p style={{ fontFamily: T.ui, fontSize: 11.5, color: T.dim, lineHeight: 1.5, margin: "0 0 12px" }}><b style={{ color: T.accent }}>{mesLbl(d.mes)}</b> es el mes activo: lo que marques aquí actualiza tus Datos.{plan && <> El ahorro automático sigue el plan congelado al cerrar {mesNom(plan.origen)}.</>}</p>
       )}
 
       <Seccion icon="transfer" titulo="Reparto por banco" abierto={abierto("rep")} onTog={() => togL("rep")}>
-        <div style={{ fontFamily: T.ui, fontSize: 10.5, color: T.dim, marginBottom: 10 }}>{plan ? `Con las cifras congeladas al cerrar ${MESES[plan.origen]}.` : "Con las cifras actuales (se congelarán al cerrar el mes)."}</div>
+        <div style={{ fontFamily: T.ui, fontSize: 10.5, color: T.dim, marginBottom: 10 }}>{plan ? `Con las cifras congeladas al cerrar ${mesNom(plan.origen)}.` : "Con las cifras actuales (se congelarán al cerrar el mes)."}</div>
         {d.bancos.map((b) => {
           const ne = necesita(b.id); const esNom = b.id === bancoNom;
           const retiene = esNom ? ingresoTotalMes - (totalReparto - ne.total) : 0;
@@ -899,7 +963,7 @@ function VistaMes({ d, upd, n, ingresoMes, apartarAnual, fijosEfectivos, nombreB
       </Seccion>
 
       {d.anuales.length > 0 && (
-        <Seccion icon="anual" titulo={`Anuales de ${MESES[d.mes]}`} extra={`${eur(anualesPagadosMes)} pagado`} abierto={abierto("anu")} onTog={() => togL("anu")}>
+        <Seccion icon="anual" titulo={`Anuales de ${mesNom(d.mes)}`} extra={`${eur(anualesPagadosMes)} pagado`} abierto={abierto("anu")} onTog={() => togL("anu")}>
           <div style={{ fontFamily: T.ui, fontSize: 10.5, color: T.dim, marginBottom: 10 }}>Registra los pagos de gastos anuales de este mes. Actualizan lo pendiente en Datos y el prorrateo.</div>
           {d.anuales.map((cat) => cat.conceptos.map((x) => {
             const pg = pagadoDe(x); const pend = Math.max(0, n(x.importe) - pg);
@@ -928,7 +992,7 @@ function VistaMes({ d, upd, n, ingresoMes, apartarAnual, fijosEfectivos, nombreB
         </Seccion>
       )}
 
-      <Seccion icon="ingreso" titulo={`Ingresos extra de ${MESES[d.mes]}`} extra={"+" + eur(totalExtraMes)} abierto={abierto("ing")} onTog={() => togL("ing")}>
+      <Seccion icon="ingreso" titulo={`Ingresos extra de ${mesNom(d.mes)}`} extra={"+" + eur(totalExtraMes)} abierto={abierto("ing")} onTog={() => togL("ing")}>
         <div style={{ fontFamily: T.ui, fontSize: 10.5, color: T.dim, marginBottom: 10 }}>Ingresos que solo entran este mes (paga extra, venta, devolución…). Suman al margen.</div>
         {extraMes.map((g) => soloLectura ? (
           <Fila key={g.id} l={g.nombre || "(sin nombre)"} v={"+" + eur(g.importe)} c={T.accent} />
@@ -943,7 +1007,7 @@ function VistaMes({ d, upd, n, ingresoMes, apartarAnual, fijosEfectivos, nombreB
         {!soloLectura && <AddBtn label="Añadir ingreso extra" onClick={() => upd((c) => { c.ingresosMes = c.ingresosMes || {}; c.ingresosMes[mesKey] = c.ingresosMes[mesKey] || []; c.ingresosMes[mesKey].push({ id: uid(), nombre: "", importe: 0 }); })} />}
       </Seccion>
 
-      <Seccion icon="gasto" titulo={`Puntuales de ${MESES[d.mes]}`} extra={eur(totalPuntuales)} abierto={abierto("pun")} onTog={() => togL("pun")}>
+      <Seccion icon="gasto" titulo={`Puntuales de ${mesNom(d.mes)}`} extra={eur(totalPuntuales)} abierto={abierto("pun")} onTog={() => togL("pun")}>
         <div style={{ fontFamily: T.ui, fontSize: 10.5, color: T.dim, marginBottom: 10 }}>Gastos que solo ocurren este mes (no se repiten).</div>
         {puntualesMes.map((g) => soloLectura ? (
           <Fila key={g.id} l={g.nombre || "(sin nombre)"} v={"−" + eur(g.importe)} c={T.mid} />
@@ -972,14 +1036,14 @@ function VistaMes({ d, upd, n, ingresoMes, apartarAnual, fijosEfectivos, nombreB
         {esActivo && !cerrado && (
           <>
             <button onClick={cerrarYAvanzar} style={{ width: "100%", padding: "12px", borderRadius: 10, border: "none", cursor: "pointer", fontFamily: T.ui, fontSize: 13, fontWeight: 700, background: T.accent, color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
-              <Icon n="check" s={16} c="#fff" /> Cerrar {MESES[d.mes]} y activar {MESES[sig]}
+              <Icon n="check" s={16} c="#fff" /> Cerrar {mesLbl(d.mes)} y activar {mesLbl(sig)}
             </button>
-            <div style={{ fontFamily: T.ui, fontSize: 10, color: T.dim, textAlign: "center", marginTop: 8, lineHeight: 1.4 }}>Al cerrar se congelan las cuotas y el prorrateo actuales como plan de {MESES[sig]}.</div>
+            <div style={{ fontFamily: T.ui, fontSize: 10, color: T.dim, textAlign: "center", marginTop: 8, lineHeight: 1.4 }}>Al cerrar se congelan las cuotas y el prorrateo actuales como plan de {mesNom(sig)}.</div>
           </>
         )}
         {esActivo && cerrado && (
           <button onClick={reabrir} style={{ width: "100%", padding: "12px", borderRadius: 10, border: `1px solid ${T.accent}`, cursor: "pointer", fontFamily: T.ui, fontSize: 13, fontWeight: 700, background: "none", color: T.accent, display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
-            <Icon n="lock" s={16} c={T.accent} /> {MESES[d.mes]} cerrado · reabrir
+            <Icon n="lock" s={16} c={T.accent} /> {mesLbl(d.mes)} cerrado · reabrir
           </button>
         )}
         {soloLectura && <div style={{ fontFamily: T.ui, fontSize: 10.5, color: T.dim, textAlign: "center" }}>{cerrado ? "Mes cerrado." : "Mes en consulta."} Para modificarlo, actívalo arriba.</div>}
